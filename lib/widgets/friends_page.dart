@@ -1,4 +1,5 @@
-﻿import 'dart:convert';
+﻿import 'dart:async';
+import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
@@ -8,6 +9,7 @@ import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/widgets/me_page.dart';
 
 class FriendsPage extends StatefulWidget {
   const FriendsPage({
@@ -28,14 +30,30 @@ class _FriendsPageState extends State<FriendsPage> {
 
   bool _loading = true;
   String? _error;
-  List<LimitedUserFriend> _friends = const [];
+  int _currentTabIndex = 0;
+  List<_FriendEntry> _friends = const [];
   final Map<String, String> _worldNameById = {};
   final Map<String, String> _instanceTypeByLocation = {};
+  Timer? _refreshCooldownTimer;
+  StreamSubscription<VrcStreamingEvent>? _wsSubscription;
+  int _refreshCooldownSeconds = 0;
+  bool _onlineExpanded = true;
+  bool _webExpanded = true;
+  bool _offlineExpanded = false;
 
   @override
   void initState() {
     super.initState();
+    _startStreamingSync();
     _loadFriends();
+  }
+
+  @override
+  void dispose() {
+    _refreshCooldownTimer?.cancel();
+    _wsSubscription?.cancel();
+    widget.api.streaming.stop();
+    super.dispose();
   }
 
   Future<void> _loadFriends() async {
@@ -65,7 +83,7 @@ class _FriendsPageState extends State<FriendsPage> {
       merged[friend.id] = friend;
     }
 
-    final friends = merged.values.toList()
+    final friends = merged.values.map(_FriendEntry.fromLimitedUserFriend).toList()
       ..sort((a, b) {
         final aOnline = a.status != UserStatus.offline;
         final bOnline = b.status != UserStatus.offline;
@@ -76,6 +94,7 @@ class _FriendsPageState extends State<FriendsPage> {
     setState(() {
       _loading = false;
       _friends = friends;
+      _error = null;
     });
 
     _resolveLocationDetails(friends);
@@ -127,34 +146,209 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   Future<void> _logout() async {
+    _wsSubscription?.cancel();
+    widget.api.streaming.stop();
     await widget.api.auth.logout();
     if (!mounted) return;
     Navigator.of(context).pop();
+  }
+
+  void _startStreamingSync() {
+    _wsSubscription = widget.api.streaming.vrcEventStream.listen(
+      _onWsEvent,
+      onError: (Object error) {
+        debugPrint('WS stream error: $error');
+      },
+    );
+    widget.api.streaming.start();
+  }
+
+  void _onWsEvent(VrcStreamingEvent event) {
+    if (!mounted) return;
+
+    if (event is ErrorEvent) {
+      debugPrint('WS event error: ${event.message}');
+      return;
+    }
+
+    switch (event.type) {
+      case VrcStreamingEventType.friendOnline:
+        final e = event as FriendOnlineEvent;
+        _upsertFriendFromWsUser(
+          e.user,
+          statusOverride: UserStatus.active,
+          locationOverride: e.location,
+        );
+        break;
+      case VrcStreamingEventType.friendLocation:
+        final e = event as FriendLocationEvent;
+        _upsertFriendFromWsUser(
+          e.user,
+          statusOverride: e.user.status,
+          locationOverride: e.location,
+        );
+        break;
+      case VrcStreamingEventType.friendUpdate:
+        final e = event as FriendUpdateEvent;
+        _upsertFriendFromWsUser(
+          e.user,
+          statusOverride: e.user.status,
+          locationOverride: e.user.location,
+        );
+        break;
+      case VrcStreamingEventType.friendActive:
+        final e = event as FriendActiveEvent;
+        _upsertFriendFromWsUser(
+          e.user,
+          statusOverride: UserStatus.active,
+          locationOverride: 'offline',
+        );
+        break;
+      case VrcStreamingEventType.friendAdd:
+        final e = event as FriendAddEvent;
+        _upsertFriendFromWsUser(
+          e.user,
+          statusOverride: e.user.status,
+          locationOverride: e.user.location,
+        );
+        break;
+      case VrcStreamingEventType.friendOffline:
+        final e = event as FriendOfflineEvent;
+        _markFriendOffline(e.userId);
+        break;
+      case VrcStreamingEventType.friendDelete:
+        final e = event as FriendDeleteEvent;
+        _removeFriend(e.userId);
+        break;
+      case VrcStreamingEventType.userUpdate:
+      case VrcStreamingEventType.userLocation:
+      case VrcStreamingEventType.notificationReceived:
+      case VrcStreamingEventType.notificationSeen:
+      case VrcStreamingEventType.notificationResponse:
+      case VrcStreamingEventType.notificationHide:
+      case VrcStreamingEventType.notificationClear:
+      case VrcStreamingEventType.error:
+      case VrcStreamingEventType.unknown:
+        break;
+    }
+  }
+
+  void _upsertFriendFromWsUser(
+    User user, {
+    required UserStatus statusOverride,
+    String? locationOverride,
+  }) {
+    final index = _friends.indexWhere((f) => f.id == user.id);
+    final location = (locationOverride ?? user.location ?? 'offline').trim();
+    final updated = _FriendEntry.fromWsUser(
+      user,
+      status: statusOverride,
+      location: location.isEmpty ? 'offline' : location,
+    );
+
+    if (index == -1) {
+      setState(() {
+        _friends = [..._friends, updated]..sort(_sortFriends);
+      });
+    } else {
+      final next = [..._friends];
+      next[index] = updated;
+      next.sort(_sortFriends);
+      setState(() {
+        _friends = next;
+      });
+    }
+
+    _resolveLocationDetails(_friends);
+  }
+
+  void _markFriendOffline(String userId) {
+    final index = _friends.indexWhere((f) => f.id == userId);
+    if (index == -1) return;
+
+    final next = [..._friends];
+    next[index] = next[index].copyWith(
+      status: UserStatus.offline,
+      location: 'offline',
+    );
+    next.sort(_sortFriends);
+    setState(() {
+      _friends = next;
+    });
+  }
+
+  void _removeFriend(String userId) {
+    final next = _friends.where((f) => f.id != userId).toList();
+    if (next.length == _friends.length) return;
+    setState(() {
+      _friends = next;
+    });
+  }
+
+  int _sortFriends(_FriendEntry a, _FriendEntry b) {
+    final aOnline = a.status != UserStatus.offline;
+    final bOnline = b.status != UserStatus.offline;
+    if (aOnline != bOnline) return aOnline ? -1 : 1;
+    return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('好友列表 (${_friends.length})'),
+        title: Text(
+          _currentTabIndex == 0 ? '好友位置 (${_friends.length})' : '我',
+        ),
         actions: [
-          IconButton(
-            onPressed: _loadFriends,
-            tooltip: '刷新',
-            icon: const Icon(Icons.refresh),
+          if (_currentTabIndex == 0)
+            IconButton(
+              onPressed: _loading || _refreshCooldownSeconds > 0
+                  ? null
+                  : _onRefreshPressed,
+              tooltip: _refreshCooldownSeconds > 0
+                  ? '刷新 (${_refreshCooldownSeconds}s)'
+                  : '刷新',
+              icon: const Icon(Icons.refresh),
+            ),
+          if (_currentTabIndex == 1)
+            IconButton(
+              onPressed: _logout,
+              tooltip: '退出登录',
+              icon: const Icon(Icons.logout),
+            ),
+        ],
+      ),
+      body: IndexedStack(
+        index: _currentTabIndex,
+        children: [
+          _buildFriendsBody(),
+          MePage(currentUser: widget.currentUser),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentTabIndex,
+        onDestinationSelected: (index) {
+          setState(() {
+            _currentTabIndex = index;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.location_on_outlined),
+            selectedIcon: Icon(Icons.location_on),
+            label: '好友位置',
           ),
-          IconButton(
-            onPressed: _logout,
-            tooltip: '退出登录',
-            icon: const Icon(Icons.logout),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: '我',
           ),
         ],
       ),
-      body: _buildBody(),
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildFriendsBody() {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -172,18 +366,134 @@ class _FriendsPageState extends State<FriendsPage> {
       return const Center(child: Text('暂无好友数据'));
     }
 
-    return ListView.separated(
-      itemCount: _friends.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, index) => _FriendRow(
-        friend: _friends[index],
-        dio: widget.api.rawApi.dio,
-        locationText: _locationText(_friends[index].location),
+    final grouped = _groupFriends(_friends);
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        _buildGroupSection(
+          title: '在线',
+          friends: grouped.online,
+          expanded: _onlineExpanded,
+          onExpansionChanged: (value) {
+            setState(() {
+              _onlineExpanded = value;
+            });
+          },
+        ),
+        _buildGroupSection(
+          title: '在网页或其他端登录',
+          friends: grouped.webOrOtherClient,
+          expanded: _webExpanded,
+          onExpansionChanged: (value) {
+            setState(() {
+              _webExpanded = value;
+            });
+          },
+        ),
+        _buildGroupSection(
+          title: '离线',
+          friends: grouped.offline,
+          expanded: _offlineExpanded,
+          onExpansionChanged: (value) {
+            setState(() {
+              _offlineExpanded = value;
+            });
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGroupSection({
+    required String title,
+    required List<_FriendEntry> friends,
+    required bool expanded,
+    required ValueChanged<bool> onExpansionChanged,
+  }) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: ExpansionTile(
+        initiallyExpanded: expanded,
+        onExpansionChanged: onExpansionChanged,
+        title: Text('$title (${friends.length})'),
+        children: friends.isEmpty
+            ? const [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('暂无数据'),
+                  ),
+                ),
+              ]
+            : [
+                for (var i = 0; i < friends.length; i++) ...[
+                  _FriendRow(
+                    friend: friends[i],
+                    dio: widget.api.rawApi.dio,
+                    locationText: _locationTextFor(friends[i]),
+                  ),
+                  if (i != friends.length - 1) const Divider(height: 1),
+                ],
+              ],
       ),
     );
   }
 
-  Future<void> _resolveLocationDetails(List<LimitedUserFriend> friends) async {
+  Future<void> _onRefreshPressed() async {
+    _startRefreshCooldown();
+    await _loadFriends();
+  }
+
+  void _startRefreshCooldown() {
+    _refreshCooldownTimer?.cancel();
+    setState(() {
+      _refreshCooldownSeconds = 60;
+    });
+
+    _refreshCooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_refreshCooldownSeconds <= 1) {
+        timer.cancel();
+        setState(() {
+          _refreshCooldownSeconds = 0;
+        });
+        return;
+      }
+
+      setState(() {
+        _refreshCooldownSeconds -= 1;
+      });
+    });
+  }
+  _FriendGroups _groupFriends(List<_FriendEntry> friends) {
+    final List<_FriendEntry> online = [];
+    final List<_FriendEntry> webOrOtherClient = [];
+    final List<_FriendEntry> offline = [];
+
+    for (final friend in friends) {
+      final isLocationOffline = friend.location.trim().toLowerCase() == 'offline';
+      if (friend.status == UserStatus.offline) {
+        offline.add(friend);
+      } else if (isLocationOffline) {
+        webOrOtherClient.add(friend);
+      } else {
+        online.add(friend);
+      }
+    }
+
+    return _FriendGroups(
+      online: online,
+      webOrOtherClient: webOrOtherClient,
+      offline: offline,
+    );
+  }
+
+  Future<void> _resolveLocationDetails(List<_FriendEntry> friends) async {
     final Set<String> worldIds = {};
     final List<(String, String, String)> worldInstances = [];
 
@@ -236,9 +546,12 @@ class _FriendsPageState extends State<FriendsPage> {
     }
   }
 
-  String _locationText(String rawLocation) {
-    final location = rawLocation.trim();
+  String _locationTextFor(_FriendEntry friend) {
+    final location = friend.location.trim();
     final lower = location.toLowerCase();
+    if (friend.status != UserStatus.offline && lower == 'offline') {
+      return '在网页或其他端登录';
+    }
     if (lower.contains('private')) return '在私人房间';
     if (lower == 'offline') return '离线';
 
@@ -299,6 +612,93 @@ class _ParsedLocation {
   final String instanceId;
 }
 
+class _FriendEntry {
+  const _FriendEntry({
+    required this.id,
+    required this.displayName,
+    required this.status,
+    required this.location,
+    this.profilePicOverrideThumbnail,
+    this.profilePicOverride,
+    this.currentAvatarThumbnailImageUrl,
+    this.userIcon,
+    this.imageUrl,
+  });
+
+  factory _FriendEntry.fromLimitedUserFriend(LimitedUserFriend friend) {
+    return _FriendEntry(
+      id: friend.id,
+      displayName: friend.displayName,
+      status: friend.status,
+      location: friend.location,
+      profilePicOverrideThumbnail: friend.profilePicOverrideThumbnail,
+      profilePicOverride: friend.profilePicOverride,
+      currentAvatarThumbnailImageUrl: friend.currentAvatarThumbnailImageUrl,
+      userIcon: friend.userIcon,
+      imageUrl: friend.imageUrl,
+    );
+  }
+
+  factory _FriendEntry.fromWsUser(
+    User user, {
+    required UserStatus status,
+    required String location,
+  }) {
+    return _FriendEntry(
+      id: user.id,
+      displayName: user.displayName,
+      status: status,
+      location: location,
+      profilePicOverrideThumbnail: user.profilePicOverrideThumbnail,
+      profilePicOverride: user.profilePicOverride,
+      currentAvatarThumbnailImageUrl: user.currentAvatarThumbnailImageUrl,
+      userIcon: user.userIcon,
+      imageUrl: user.currentAvatarImageUrl,
+    );
+  }
+
+  final String id;
+  final String displayName;
+  final UserStatus status;
+  final String location;
+  final String? profilePicOverrideThumbnail;
+  final String? profilePicOverride;
+  final String? currentAvatarThumbnailImageUrl;
+  final String? userIcon;
+  final String? imageUrl;
+
+  _FriendEntry copyWith({
+    UserStatus? status,
+    String? location,
+  }) {
+    return _FriendEntry(
+      id: id,
+      displayName: displayName,
+      status: status ?? this.status,
+      location: location ?? this.location,
+      profilePicOverrideThumbnail: profilePicOverrideThumbnail,
+      profilePicOverride: profilePicOverride,
+      currentAvatarThumbnailImageUrl: currentAvatarThumbnailImageUrl,
+      userIcon: userIcon,
+      imageUrl: imageUrl,
+    );
+  }
+
+  String? get avatarUrl {
+    final candidates = [
+      profilePicOverrideThumbnail,
+      profilePicOverride,
+      currentAvatarThumbnailImageUrl,
+      userIcon,
+      imageUrl,
+    ];
+    for (final url in candidates) {
+      if (url != null && url.isNotEmpty) return url;
+    }
+    return null;
+  }
+}
+
 class _FriendRow extends StatelessWidget {
   const _FriendRow({
     required this.friend,
@@ -306,7 +706,7 @@ class _FriendRow extends StatelessWidget {
     required this.locationText,
   });
 
-  final LimitedUserFriend friend;
+  final _FriendEntry friend;
   final Dio dio;
   final String locationText;
 
@@ -315,7 +715,7 @@ class _FriendRow extends StatelessWidget {
     final statusMeta = _statusMeta(friend.status);
 
     return ListTile(
-      leading: _Avatar(imageUrl: _avatarUrl(friend), dio: dio),
+      leading: _Avatar(imageUrl: friend.avatarUrl, dio: dio),
       title: Row(
         children: [
           Expanded(
@@ -342,22 +742,6 @@ class _FriendRow extends StatelessWidget {
     );
   }
 
-  String? _avatarUrl(LimitedUserFriend friend) {
-    final candidates = [
-      friend.profilePicOverrideThumbnail,
-      friend.profilePicOverride,
-      friend.currentAvatarThumbnailImageUrl,
-      friend.userIcon,
-      friend.imageUrl,
-    ];
-
-    for (final url in candidates) {
-      if (url != null && url.isNotEmpty) return url;
-    }
-
-    return null;
-  }
-
   _StatusMeta _statusMeta(UserStatus status) {
     switch (status) {
       case UserStatus.joinMe:
@@ -372,6 +756,18 @@ class _FriendRow extends StatelessWidget {
         return const _StatusMeta(label: 'offline', color: Colors.grey);
     }
   }
+}
+
+class _FriendGroups {
+  const _FriendGroups({
+    required this.online,
+    required this.webOrOtherClient,
+    required this.offline,
+  });
+
+  final List<_FriendEntry> online;
+  final List<_FriendEntry> webOrOtherClient;
+  final List<_FriendEntry> offline;
 }
 
 class _Avatar extends StatefulWidget {
