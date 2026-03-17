@@ -361,13 +361,13 @@ class _FriendRow extends StatelessWidget {
   _StatusMeta _statusMeta(UserStatus status) {
     switch (status) {
       case UserStatus.joinMe:
-        return const _StatusMeta(label: 'join', color: Colors.blue);
+        return const _StatusMeta(label: 'joinMe', color: Colors.blue);
       case UserStatus.active:
         return const _StatusMeta(label: 'online', color: Colors.green);
       case UserStatus.askMe:
-        return const _StatusMeta(label: 'askme', color: Colors.orange);
+        return const _StatusMeta(label: 'askMe', color: Colors.orange);
       case UserStatus.busy:
-        return const _StatusMeta(label: 'nodisturb', color: Colors.red);
+        return const _StatusMeta(label: 'noDisturb', color: Colors.red);
       case UserStatus.offline:
         return const _StatusMeta(label: 'offline', color: Colors.grey);
     }
