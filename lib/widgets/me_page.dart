@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/app_config.dart';
 import 'package:vrc_monitor/widgets/settings_page.dart';
 
 class MePage extends StatefulWidget {
@@ -15,9 +16,6 @@ class MePage extends StatefulWidget {
 }
 
 class _MePageState extends State<MePage> {
-  static final Uri _projectGithubUri =
-      Uri.parse('https://github.com/ucrvk/vrc_monitor');
-
   String _appVersion = '读取中...';
 
   @override
@@ -122,8 +120,9 @@ class _MePageState extends State<MePage> {
 
   Future<bool> _openProjectGithub() async {
     try {
+      final config = await AppConfigLoader.load();
       final launched = await launchUrl(
-        _projectGithubUri,
+        config.githubPageUri,
         mode: LaunchMode.externalApplication,
       );
       if (launched) return true;
