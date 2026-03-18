@@ -6,7 +6,7 @@ class AppConfig {
 
   static const AppConfig fallback = AppConfig(
     githubPage: 'https://github.com/ucrvk/vrc_monitor',
-    branch: 'main',
+    branch: 'beta',
   );
 
   final String githubPage;

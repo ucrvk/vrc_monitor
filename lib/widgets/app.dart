@@ -13,6 +13,7 @@ class VrcMonitorApp extends StatefulWidget {
 
 class _VrcMonitorAppState extends State<VrcMonitorApp> {
   final AppUpdateChecker _updateChecker = AppUpdateChecker();
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   bool _checkedOnce = false;
 
   @override
@@ -38,10 +39,13 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
   }
 
   Future<void> _showOptionalUpdateDialog(String latestVersion) async {
+    final dialogContext = _navigatorKey.currentContext;
+    if (dialogContext == null) return;
+
     await showDialog<void>(
-      context: context,
+      context: dialogContext,
       barrierDismissible: false,
-      builder: (dialogContext) {
+      builder: (context) {
         return AlertDialog(
           title: const Text('发现新版本'),
           content: Text('发现新版本 $latestVersion，是否更新？\n取消后当前版本不再提示。'),
@@ -49,8 +53,8 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
             TextButton(
               onPressed: () async {
                 await _updateChecker.ignoreVersion(latestVersion);
-                if (dialogContext.mounted) {
-                  Navigator.of(dialogContext).pop();
+                if (context.mounted) {
+                  Navigator.of(context).pop();
                 }
               },
               child: const Text('取消（不再提示）'),
@@ -61,8 +65,8 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
                   await _updateChecker.releaseUrlForVersion(latestVersion),
                   mode: LaunchMode.externalApplication,
                 );
-                if (dialogContext.mounted && launched) {
-                  Navigator.of(dialogContext).pop();
+                if (context.mounted && launched) {
+                  Navigator.of(context).pop();
                 }
               },
               child: const Text('前往 GitHub 更新'),
@@ -74,10 +78,13 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
   }
 
   Future<void> _showForceUpdateDialog(String latestVersion) async {
+    final dialogContext = _navigatorKey.currentContext;
+    if (dialogContext == null) return;
+
     await showDialog<void>(
-      context: context,
+      context: dialogContext,
       barrierDismissible: false,
-      builder: (dialogContext) {
+      builder: (context) {
         return AlertDialog(
           title: const Text('发现新版本'),
           content: Text('发现新版本 $latestVersion，请立即更新。'),
@@ -106,6 +113,7 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'VRChat Monitor',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
