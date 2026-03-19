@@ -1,9 +1,9 @@
 import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vrc_monitor/app_config.dart';
+import 'package:vrc_monitor/network/web_client.dart';
 
 class AppUpdateInfo {
   const AppUpdateInfo({
@@ -26,15 +26,9 @@ class AppUpdateChecker {
       final config = await AppConfigLoader.load();
       final targetBranch = _isBetaVersion(localVersion) ? _betaBranch : config.branch;
 
-      final response = await Dio(
-        BaseOptions(
-          connectTimeout: const Duration(seconds: 4),
-          sendTimeout: const Duration(seconds: 4),
-          receiveTimeout: const Duration(seconds: 4),
-        ),
-      ).get(config.versionJsonRawUriForBranch(targetBranch).toString()).timeout(
-            const Duration(seconds: 5),
-          );
+      final response = await WebClient.getPublic(
+        config.versionJsonRawUriForBranch(targetBranch).toString(),
+      );
 
       final payload = _toMap(response.data);
       if (payload == null) return null;

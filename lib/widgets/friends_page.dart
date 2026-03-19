@@ -9,6 +9,8 @@ import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/network/web_client.dart';
+import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/me_page.dart';
 
 class FriendsPage extends StatefulWidget {
@@ -40,6 +42,8 @@ class _FriendsPageState extends State<FriendsPage> {
   bool _onlineExpanded = true;
   bool _webExpanded = true;
   bool _offlineExpanded = false;
+  List<_FavoriteFriendGroupView> _favoriteFriendGroups = const [];
+  final Map<String, bool> _favoriteGroupExpandedByName = {};
 
   @override
   void initState() {
@@ -62,8 +66,13 @@ class _FriendsPageState extends State<FriendsPage> {
       _error = null;
     });
 
-    final (onlineFriends, onlineFailure) = await _fetchAllFriends(offline: false);
-    final (offlineFriends, offlineFailure) = await _fetchAllFriends(offline: true);
+    final onlineFuture = _fetchAllFriends(offline: false);
+    final offlineFuture = _fetchAllFriends(offline: true);
+    final favoritesFuture = _fetchFavoriteFriendGroups();
+
+    final (onlineFriends, onlineFailure) = await onlineFuture;
+    final (offlineFriends, offlineFailure) = await offlineFuture;
+    final favoriteFriendGroups = await favoritesFuture;
 
     if (!mounted) return;
 
@@ -84,18 +93,15 @@ class _FriendsPageState extends State<FriendsPage> {
     }
 
     final friends = merged.values.map(_FriendEntry.fromLimitedUserFriend).toList()
-      ..sort((a, b) {
-        final aOnline = a.status != UserStatus.offline;
-        final bOnline = b.status != UserStatus.offline;
-        if (aOnline != bOnline) return aOnline ? -1 : 1;
-        return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
-      });
+      ..sort(_sortFriends);
 
     setState(() {
       _loading = false;
       _friends = friends;
+      _favoriteFriendGroups = favoriteFriendGroups;
       _error = null;
     });
+    _syncFavoriteGroupExpansionState(favoriteFriendGroups);
 
     _resolveLocationDetails(friends);
   }
@@ -126,6 +132,68 @@ class _FriendsPageState extends State<FriendsPage> {
     }
 
     return (result, lastFailure);
+  }
+
+  Future<List<_FavoriteFriendGroupView>> _fetchFavoriteFriendGroups() async {
+    final (groupsSuccess, _) = await widget.api.rawApi
+        .getFavoritesApi()
+        .getFavoriteGroups(n: 100)
+        .validateVrc();
+    if (groupsSuccess == null) return const [];
+
+    final friendGroups = groupsSuccess.data
+        .where((g) => g.type == FavoriteType.friend)
+        .toList()
+      ..sort(
+        (a, b) => a.displayName.toLowerCase().compareTo(
+              b.displayName.toLowerCase(),
+            ),
+      );
+    if (friendGroups.isEmpty) return const [];
+
+    final friendIdsByGroupName = <String, Set<String>>{
+      for (final group in friendGroups) group.name: <String>{},
+    };
+
+    var offset = 0;
+    while (true) {
+      final (favoritesSuccess, _) = await widget.api.rawApi
+          .getFavoritesApi()
+          .getFavorites(type: 'friend', n: _pageSize, offset: offset)
+          .validateVrc();
+      if (favoritesSuccess == null) break;
+
+      final page = favoritesSuccess.data;
+      for (final favorite in page) {
+        for (final tag in favorite.tags) {
+          final friendIds = friendIdsByGroupName[tag];
+          if (friendIds != null) {
+            friendIds.add(favorite.favoriteId);
+          }
+        }
+      }
+
+      if (page.length < _pageSize) break;
+      offset += page.length;
+    }
+
+    return friendGroups
+        .map(
+          (group) => _FavoriteFriendGroupView(
+            name: group.name,
+            displayName: group.displayName,
+            friendIds: friendIdsByGroupName[group.name] ?? const {},
+          ),
+        )
+        .toList();
+  }
+
+  void _syncFavoriteGroupExpansionState(List<_FavoriteFriendGroupView> groups) {
+    final nextKeys = groups.map((g) => g.name).toSet();
+    _favoriteGroupExpandedByName.removeWhere((key, _) => !nextKeys.contains(key));
+    for (final group in groups) {
+      _favoriteGroupExpandedByName.putIfAbsent(group.name, () => true);
+    }
   }
 
   String _extractFailureText(InvalidResponse? failure) {
@@ -202,6 +270,7 @@ class _FriendsPageState extends State<FriendsPage> {
           e.user,
           statusOverride: UserStatus.active,
           locationOverride: 'offline',
+          platformOverride: 'web',
         );
         break;
       case VrcStreamingEventType.friendAdd:
@@ -237,6 +306,7 @@ class _FriendsPageState extends State<FriendsPage> {
     User user, {
     required UserStatus statusOverride,
     String? locationOverride,
+    String? platformOverride,
   }) {
     final index = _friends.indexWhere((f) => f.id == user.id);
     final location = (locationOverride ?? user.location ?? 'offline').trim();
@@ -244,6 +314,7 @@ class _FriendsPageState extends State<FriendsPage> {
       user,
       status: statusOverride,
       location: location.isEmpty ? 'offline' : location,
+      lastPlatform: platformOverride ?? user.lastPlatform,
     );
 
     if (index == -1) {
@@ -289,7 +360,25 @@ class _FriendsPageState extends State<FriendsPage> {
     final aOnline = a.status != UserStatus.offline;
     final bOnline = b.status != UserStatus.offline;
     if (aOnline != bOnline) return aOnline ? -1 : 1;
+
+    if (aOnline && bOnline) {
+      final aFavoritePriority = _onlineFavoritePriority(a.id);
+      final bFavoritePriority = _onlineFavoritePriority(b.id);
+      if (aFavoritePriority != bFavoritePriority) {
+        return aFavoritePriority.compareTo(bFavoritePriority);
+      }
+    }
+
     return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
+  }
+
+  int _onlineFavoritePriority(String friendId) {
+    for (var i = 0; i < _favoriteFriendGroups.length; i++) {
+      if (_favoriteFriendGroups[i].friendIds.contains(friendId)) {
+        return i;
+      }
+    }
+    return _favoriteFriendGroups.length + 1;
   }
 
   @override
@@ -370,16 +459,7 @@ class _FriendsPageState extends State<FriendsPage> {
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        _buildGroupSection(
-          title: '在线',
-          friends: grouped.online,
-          expanded: _onlineExpanded,
-          onExpansionChanged: (value) {
-            setState(() {
-              _onlineExpanded = value;
-            });
-          },
-        ),
+        _buildOnlineGroupSection(grouped.online),
         _buildGroupSection(
           title: '在网页或其他端登录',
           friends: grouped.webOrOtherClient,
@@ -416,33 +496,112 @@ class _FriendsPageState extends State<FriendsPage> {
         initiallyExpanded: expanded,
         onExpansionChanged: onExpansionChanged,
         title: Text('$title (${friends.length})'),
-        children: friends.isEmpty
-            ? const [
-                Padding(
-                  padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('暂无数据'),
-                  ),
-                ),
-              ]
-            : [
-                for (var i = 0; i < friends.length; i++) ...[
-                  _FriendRow(
-                    friend: friends[i],
-                    dio: widget.api.rawApi.dio,
-                    locationText: _locationTextFor(friends[i]),
-                  ),
-                  if (i != friends.length - 1) const Divider(height: 1),
-                ],
-              ],
+        children: _buildFriendRows(friends),
       ),
     );
+  }
+
+  Widget _buildOnlineGroupSection(List<_FriendEntry> onlineFriends) {
+    final favoriteSections = <Widget>[];
+    final assignedFriendIds = <String>{};
+
+    for (final favoriteGroup in _favoriteFriendGroups) {
+      final members = onlineFriends
+          .where((f) => favoriteGroup.friendIds.contains(f.id))
+          .toList()
+        ..sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+      assignedFriendIds.addAll(members.map((m) => m.id));
+
+      favoriteSections.add(
+        ExpansionTile(
+          initiallyExpanded: _favoriteGroupExpandedByName[favoriteGroup.name] ?? true,
+          onExpansionChanged: (value) {
+            setState(() {
+              _favoriteGroupExpandedByName[favoriteGroup.name] = value;
+            });
+          },
+          title: Text('${favoriteGroup.displayName} (${members.length})'),
+          children: _buildFriendRows(members),
+        ),
+      );
+    }
+
+    final others = onlineFriends
+        .where((f) => !assignedFriendIds.contains(f.id))
+        .toList()
+      ..sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+
+    if (favoriteSections.isNotEmpty) {
+      favoriteSections.add(
+        ExpansionTile(
+          initiallyExpanded: true,
+          title: Text('其他在线 (${others.length})'),
+          children: _buildFriendRows(others),
+        ),
+      );
+    } else {
+      favoriteSections.addAll(_buildFriendRows(onlineFriends));
+    }
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: ExpansionTile(
+        initiallyExpanded: _onlineExpanded,
+        onExpansionChanged: (value) {
+          setState(() {
+            _onlineExpanded = value;
+          });
+        },
+        title: Text('在线 (${onlineFriends.length})'),
+        children: favoriteSections,
+      ),
+    );
+  }
+
+  List<Widget> _buildFriendRows(List<_FriendEntry> friends) {
+    if (friends.isEmpty) {
+      return const [
+        Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('暂无数据'),
+          ),
+        ),
+      ];
+    }
+
+    return [
+      for (var i = 0; i < friends.length; i++) ...[
+        _FriendRow(
+          friend: friends[i],
+          dio: widget.api.rawApi.dio,
+          locationText: _locationTextFor(friends[i]),
+          onTap: () => _openFriendDetailPage(friends[i]),
+        ),
+        if (i != friends.length - 1) const Divider(height: 1),
+      ],
+    ];
   }
 
   Future<void> _onRefreshPressed() async {
     _startRefreshCooldown();
     await _loadFriends();
+  }
+
+  Future<void> _openFriendDetailPage(_FriendEntry friend) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FriendDetailPage(
+          dio: widget.api.rawApi.dio,
+          displayName: friend.displayName,
+          avatarUrl: friend.smallAvatarUrl,
+          imageUrl: friend.imageUrl,
+          bio: friend.bio,
+          nameColor: friend.trustColor,
+        ),
+      ),
+    );
   }
 
   void _startRefreshCooldown() {
@@ -476,10 +635,9 @@ class _FriendsPageState extends State<FriendsPage> {
     final List<_FriendEntry> offline = [];
 
     for (final friend in friends) {
-      final isLocationOffline = friend.location.trim().toLowerCase() == 'offline';
       if (friend.status == UserStatus.offline) {
         offline.add(friend);
-      } else if (isLocationOffline) {
+      } else if (_isWebOrOtherClient(friend)) {
         webOrOtherClient.add(friend);
       } else {
         online.add(friend);
@@ -491,6 +649,11 @@ class _FriendsPageState extends State<FriendsPage> {
       webOrOtherClient: webOrOtherClient,
       offline: offline,
     );
+  }
+
+  bool _isWebOrOtherClient(_FriendEntry friend) {
+    return friend.status != UserStatus.offline &&
+        friend.location.trim().toLowerCase() == 'offline';
   }
 
   Future<void> _resolveLocationDetails(List<_FriendEntry> friends) async {
@@ -549,7 +712,7 @@ class _FriendsPageState extends State<FriendsPage> {
   String _locationTextFor(_FriendEntry friend) {
     final location = friend.location.trim();
     final lower = location.toLowerCase();
-    if (friend.status != UserStatus.offline && lower == 'offline') {
+    if (friend.status != UserStatus.offline && _isWebOrOtherClient(friend)) {
       return '在网页或其他端登录';
     }
     if (lower.contains('private')) return '在私人房间';
@@ -618,6 +781,9 @@ class _FriendEntry {
     required this.displayName,
     required this.status,
     required this.location,
+    required this.lastPlatform,
+    required this.tags,
+    this.bio,
     this.profilePicOverrideThumbnail,
     this.profilePicOverride,
     this.currentAvatarThumbnailImageUrl,
@@ -631,6 +797,9 @@ class _FriendEntry {
       displayName: friend.displayName,
       status: friend.status,
       location: friend.location,
+      lastPlatform: friend.lastPlatform,
+      tags: _normalizeTags(friend.tags),
+      bio: friend.bio,
       profilePicOverrideThumbnail: friend.profilePicOverrideThumbnail,
       profilePicOverride: friend.profilePicOverride,
       currentAvatarThumbnailImageUrl: friend.currentAvatarThumbnailImageUrl,
@@ -643,12 +812,16 @@ class _FriendEntry {
     User user, {
     required UserStatus status,
     required String location,
+    required String lastPlatform,
   }) {
     return _FriendEntry(
       id: user.id,
       displayName: user.displayName,
       status: status,
       location: location,
+      lastPlatform: lastPlatform,
+      tags: _normalizeTags(user.tags),
+      bio: user.bio,
       profilePicOverrideThumbnail: user.profilePicOverrideThumbnail,
       profilePicOverride: user.profilePicOverride,
       currentAvatarThumbnailImageUrl: user.currentAvatarThumbnailImageUrl,
@@ -657,10 +830,20 @@ class _FriendEntry {
     );
   }
 
+  static List<String> _normalizeTags(Object? rawTags) {
+    if (rawTags is List) {
+      return rawTags.whereType<String>().toList();
+    }
+    return const [];
+  }
+
   final String id;
   final String displayName;
   final UserStatus status;
   final String location;
+  final String lastPlatform;
+  final List<String> tags;
+  final String? bio;
   final String? profilePicOverrideThumbnail;
   final String? profilePicOverride;
   final String? currentAvatarThumbnailImageUrl;
@@ -670,12 +853,16 @@ class _FriendEntry {
   _FriendEntry copyWith({
     UserStatus? status,
     String? location,
+    String? lastPlatform,
   }) {
     return _FriendEntry(
       id: id,
       displayName: displayName,
       status: status ?? this.status,
       location: location ?? this.location,
+      lastPlatform: lastPlatform ?? this.lastPlatform,
+      tags: tags,
+      bio: bio,
       profilePicOverrideThumbnail: profilePicOverrideThumbnail,
       profilePicOverride: profilePicOverride,
       currentAvatarThumbnailImageUrl: currentAvatarThumbnailImageUrl,
@@ -697,6 +884,20 @@ class _FriendEntry {
     }
     return null;
   }
+
+  String? get smallAvatarUrl {
+    if (userIcon != null && userIcon!.isNotEmpty) return userIcon;
+    return avatarUrl;
+  }
+
+  Color get trustColor {
+    final trustTags = tags.map((e) => e.toLowerCase()).toSet();
+    if (trustTags.contains('system_trust_veteran')) return const Color(0xFF8E44AD);
+    if (trustTags.contains('system_trust_trusted')) return const Color(0xFFFF9800);
+    if (trustTags.contains('system_trust_known')) return const Color(0xFF4CAF50);
+    if (trustTags.contains('system_trust_basic')) return const Color(0xFF64B5F6);
+    return Colors.grey;
+  }
 }
 
 class _FriendRow extends StatelessWidget {
@@ -704,23 +905,27 @@ class _FriendRow extends StatelessWidget {
     required this.friend,
     required this.dio,
     required this.locationText,
+    required this.onTap,
   });
 
   final _FriendEntry friend;
   final Dio dio;
   final String locationText;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final statusMeta = _statusMeta(friend.status);
 
     return ListTile(
-      leading: _Avatar(imageUrl: friend.avatarUrl, dio: dio),
+      onTap: onTap,
+      leading: _Avatar(imageUrl: friend.smallAvatarUrl, dio: dio),
       title: Row(
         children: [
           Expanded(
             child: Text(
               friend.displayName,
+              style: TextStyle(color: friend.trustColor, fontWeight: FontWeight.w600),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -768,6 +973,18 @@ class _FriendGroups {
   final List<_FriendEntry> online;
   final List<_FriendEntry> webOrOtherClient;
   final List<_FriendEntry> offline;
+}
+
+class _FavoriteFriendGroupView {
+  const _FavoriteFriendGroupView({
+    required this.name,
+    required this.displayName,
+    required this.friendIds,
+  });
+
+  final String name;
+  final String displayName;
+  final Set<String> friendIds;
 }
 
 class _Avatar extends StatefulWidget {
@@ -851,7 +1068,7 @@ class _AvatarState extends State<_Avatar> {
     try {
       final response = await widget.dio.get<List<int>>(
         url,
-        options: Options(
+        options: WebClient.withUserAgent(
           responseType: ResponseType.bytes,
           validateStatus: (_) => true,
         ),
