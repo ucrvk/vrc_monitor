@@ -1,24 +1,16 @@
-﻿import 'dart:async';
-import 'dart:convert';
-import 'dart:io' as io;
-import 'dart:typed_data';
+import 'dart:async';
 
-import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
-import 'package:vrc_monitor/network/web_client.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
+import 'package:vrc_monitor/widgets/login_page.dart';
 import 'package:vrc_monitor/widgets/me_page.dart';
+import 'package:vrc_monitor/widgets/vrc_avatar.dart';
 
 class FriendsPage extends StatefulWidget {
-  const FriendsPage({
-    super.key,
-    required this.api,
-    required this.currentUser,
-  });
+  const FriendsPage({super.key, required this.api, required this.currentUser});
 
   final VrchatDart api;
   final CurrentUser currentUser;
@@ -92,8 +84,9 @@ class _FriendsPageState extends State<FriendsPage> {
       merged[friend.id] = friend;
     }
 
-    final friends = merged.values.map(_FriendEntry.fromLimitedUserFriend).toList()
-      ..sort(_sortFriends);
+    final friends =
+        merged.values.map(_FriendEntry.fromLimitedUserFriend).toList()
+          ..sort(_sortFriends);
 
     setState(() {
       _loading = false;
@@ -114,10 +107,12 @@ class _FriendsPageState extends State<FriendsPage> {
     var offset = 0;
 
     while (true) {
-      final (success, failure) = await widget.api.rawApi
-          .getFriendsApi()
-          .getFriends(offline: offline, n: _pageSize, offset: offset)
-          .validateVrc();
+      final (success, failure) = await _runVrcRequest(
+        () => widget.api.rawApi
+            .getFriendsApi()
+            .getFriends(offline: offline, n: _pageSize, offset: offset)
+            .validateVrc(),
+      );
 
       if (success == null) {
         lastFailure = failure;
@@ -135,20 +130,21 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   Future<List<_FavoriteFriendGroupView>> _fetchFavoriteFriendGroups() async {
-    final (groupsSuccess, _) = await widget.api.rawApi
-        .getFavoritesApi()
-        .getFavoriteGroups(n: 100)
-        .validateVrc();
+    final (groupsSuccess, _) = await _runVrcRequest(
+      () => widget.api.rawApi
+          .getFavoritesApi()
+          .getFavoriteGroups(n: 100)
+          .validateVrc(),
+    );
     if (groupsSuccess == null) return const [];
 
-    final friendGroups = groupsSuccess.data
-        .where((g) => g.type == FavoriteType.friend)
-        .toList()
-      ..sort(
-        (a, b) => a.displayName.toLowerCase().compareTo(
+    final friendGroups =
+        groupsSuccess.data.where((g) => g.type == FavoriteType.friend).toList()
+          ..sort(
+            (a, b) => a.displayName.toLowerCase().compareTo(
               b.displayName.toLowerCase(),
             ),
-      );
+          );
     if (friendGroups.isEmpty) return const [];
 
     final friendIdsByGroupName = <String, Set<String>>{
@@ -157,10 +153,12 @@ class _FriendsPageState extends State<FriendsPage> {
 
     var offset = 0;
     while (true) {
-      final (favoritesSuccess, _) = await widget.api.rawApi
-          .getFavoritesApi()
-          .getFavorites(type: 'friend', n: _pageSize, offset: offset)
-          .validateVrc();
+      final (favoritesSuccess, _) = await _runVrcRequest(
+        () => widget.api.rawApi
+            .getFavoritesApi()
+            .getFavorites(type: 'friend', n: _pageSize, offset: offset)
+            .validateVrc(),
+      );
       if (favoritesSuccess == null) break;
 
       final page = favoritesSuccess.data;
@@ -190,7 +188,9 @@ class _FriendsPageState extends State<FriendsPage> {
 
   void _syncFavoriteGroupExpansionState(List<_FavoriteFriendGroupView> groups) {
     final nextKeys = groups.map((g) => g.name).toSet();
-    _favoriteGroupExpandedByName.removeWhere((key, _) => !nextKeys.contains(key));
+    _favoriteGroupExpandedByName.removeWhere(
+      (key, _) => !nextKeys.contains(key),
+    );
     for (final group in groups) {
       _favoriteGroupExpandedByName.putIfAbsent(group.name, () => true);
     }
@@ -213,12 +213,58 @@ class _FriendsPageState extends State<FriendsPage> {
     return failure.error.toString();
   }
 
+  Future<(T?, InvalidResponse?)> _runVrcRequest<T>(
+    Future<(T?, InvalidResponse?)> Function() request, {
+    int maxAttempts = 2,
+  }) async {
+    var attempt = 0;
+    InvalidResponse? lastFailure;
+
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      final (success, failure) = await request();
+      if (success != null) {
+        return (success, null);
+      }
+
+      lastFailure = failure;
+      if (failure == null || !_isRetryableFailure(failure)) {
+        return (null, failure);
+      }
+
+      if (attempt < maxAttempts) {
+        await Future<void>.delayed(Duration(milliseconds: attempt * 300));
+      }
+    }
+
+    return (null, lastFailure);
+  }
+
+  bool _isRetryableFailure(InvalidResponse failure) {
+    final error = failure.error;
+    if (error is DioException) {
+      if (error.type == DioExceptionType.connectionTimeout ||
+          error.type == DioExceptionType.sendTimeout ||
+          error.type == DioExceptionType.receiveTimeout ||
+          error.type == DioExceptionType.connectionError) {
+        return true;
+      }
+    }
+
+    final status = failure.response?.statusCode;
+    if (status == null) return false;
+    return status == 429 || status >= 500;
+  }
+
   Future<void> _logout() async {
     _wsSubscription?.cancel();
     widget.api.streaming.stop();
     await widget.api.auth.logout();
     if (!mounted) return;
-    Navigator.of(context).pop();
+    await Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      (route) => false,
+    );
   }
 
   void _startStreamingSync() {
@@ -385,9 +431,7 @@ class _FriendsPageState extends State<FriendsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          _currentTabIndex == 0 ? '好友位置 (${_friends.length})' : '我',
-        ),
+        title: Text(_currentTabIndex == 0 ? '好友位置 (${_friends.length})' : '我'),
         actions: [
           if (_currentTabIndex == 0)
             IconButton(
@@ -506,15 +550,21 @@ class _FriendsPageState extends State<FriendsPage> {
     final assignedFriendIds = <String>{};
 
     for (final favoriteGroup in _favoriteFriendGroups) {
-      final members = onlineFriends
-          .where((f) => favoriteGroup.friendIds.contains(f.id))
-          .toList()
-        ..sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+      final members =
+          onlineFriends
+              .where((f) => favoriteGroup.friendIds.contains(f.id))
+              .toList()
+            ..sort(
+              (a, b) => a.displayName.toLowerCase().compareTo(
+                b.displayName.toLowerCase(),
+              ),
+            );
       assignedFriendIds.addAll(members.map((m) => m.id));
 
       favoriteSections.add(
         ExpansionTile(
-          initiallyExpanded: _favoriteGroupExpandedByName[favoriteGroup.name] ?? true,
+          initiallyExpanded:
+              _favoriteGroupExpandedByName[favoriteGroup.name] ?? true,
           onExpansionChanged: (value) {
             setState(() {
               _favoriteGroupExpandedByName[favoriteGroup.name] = value;
@@ -526,10 +576,13 @@ class _FriendsPageState extends State<FriendsPage> {
       );
     }
 
-    final others = onlineFriends
-        .where((f) => !assignedFriendIds.contains(f.id))
-        .toList()
-      ..sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+    final others =
+        onlineFriends.where((f) => !assignedFriendIds.contains(f.id)).toList()
+          ..sort(
+            (a, b) => a.displayName.toLowerCase().compareTo(
+              b.displayName.toLowerCase(),
+            ),
+          );
 
     if (favoriteSections.isNotEmpty) {
       favoriteSections.add(
@@ -563,10 +616,7 @@ class _FriendsPageState extends State<FriendsPage> {
       return const [
         Padding(
           padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text('暂无数据'),
-          ),
+          child: Align(alignment: Alignment.centerLeft, child: Text('暂无数据')),
         ),
       ];
     }
@@ -594,11 +644,19 @@ class _FriendsPageState extends State<FriendsPage> {
       MaterialPageRoute<void>(
         builder: (_) => FriendDetailPage(
           dio: widget.api.rawApi.dio,
+          userId: friend.id,
           displayName: friend.displayName,
           avatarUrl: friend.smallAvatarUrl,
           imageUrl: friend.imageUrl,
           bio: friend.bio,
           nameColor: friend.trustColor,
+          status: friend.status,
+          statusDescription: friend.statusDescription,
+          pronouns: friend.pronouns,
+          bioLinks: friend.bioLinks,
+          dateJoined: friend.dateJoined,
+          lastActivity: friend.lastActivity,
+          rawApi: widget.api.rawApi,
         ),
       ),
     );
@@ -629,6 +687,7 @@ class _FriendsPageState extends State<FriendsPage> {
       });
     });
   }
+
   _FriendGroups _groupFriends(List<_FriendEntry> friends) {
     final List<_FriendEntry> online = [];
     final List<_FriendEntry> webOrOtherClient = [];
@@ -674,13 +733,18 @@ class _FriendsPageState extends State<FriendsPage> {
     if (worldIds.isEmpty && worldInstances.isEmpty) return;
 
     var changed = false;
-    for (final worldId in worldIds) {
-      final (success, _) = await widget.api.rawApi
-          .getWorldsApi()
-          .getWorld(worldId: worldId)
-          .validateVrc();
+    final worldResults = await Future.wait([
+      for (final worldId in worldIds)
+        _runVrcRequest(
+          () => widget.api.rawApi
+              .getWorldsApi()
+              .getWorld(worldId: worldId)
+              .validateVrc(),
+        ).then((result) => (worldId, result.$1)),
+    ]);
 
-      if (!mounted) return;
+    if (!mounted) return;
+    for (final (worldId, success) in worldResults) {
       if (success != null) {
         _worldNameById[worldId] = success.data.name;
       } else {
@@ -689,12 +753,18 @@ class _FriendsPageState extends State<FriendsPage> {
       changed = true;
     }
 
-    for (final (raw, worldId, instanceId) in worldInstances) {
-      final (success, _) = await widget.api.rawApi
-          .getWorldsApi()
-          .getWorldInstance(worldId: worldId, instanceId: instanceId)
-          .validateVrc();
-      if (!mounted) return;
+    final instanceResults = await Future.wait([
+      for (final (raw, worldId, instanceId) in worldInstances)
+        _runVrcRequest(
+          () => widget.api.rawApi
+              .getWorldsApi()
+              .getWorldInstance(worldId: worldId, instanceId: instanceId)
+              .validateVrc(),
+        ).then((result) => (raw, result.$1)),
+    ]);
+
+    if (!mounted) return;
+    for (final (raw, success) in instanceResults) {
       if (success != null) {
         _instanceTypeByLocation[raw] = _instanceTypeLabel(
           success.data.type,
@@ -741,7 +811,11 @@ class _FriendsPageState extends State<FriendsPage> {
 
     final instanceId = value.substring(firstColon + 1);
     if (instanceId.isEmpty) return null;
-    return _ParsedLocation(raw: value, worldId: worldId, instanceId: instanceId);
+    return _ParsedLocation(
+      raw: value,
+      worldId: worldId,
+      instanceId: instanceId,
+    );
   }
 
   String _instanceTypeLabel(
@@ -784,6 +858,11 @@ class _FriendEntry {
     required this.lastPlatform,
     required this.tags,
     this.bio,
+    this.statusDescription,
+    this.pronouns,
+    this.bioLinks = const [],
+    this.dateJoined,
+    this.lastActivity,
     this.profilePicOverrideThumbnail,
     this.profilePicOverride,
     this.currentAvatarThumbnailImageUrl,
@@ -792,24 +871,44 @@ class _FriendEntry {
   });
 
   factory _FriendEntry.fromLimitedUserFriend(LimitedUserFriend friend) {
-    return _FriendEntry(
-      id: friend.id,
-      displayName: friend.displayName,
+    return _FriendEntry.fromLimitedUser(
+      friend.toLimitedUser(),
       status: friend.status,
       location: friend.location,
       lastPlatform: friend.lastPlatform,
-      tags: _normalizeTags(friend.tags),
-      bio: friend.bio,
-      profilePicOverrideThumbnail: friend.profilePicOverrideThumbnail,
-      profilePicOverride: friend.profilePicOverride,
-      currentAvatarThumbnailImageUrl: friend.currentAvatarThumbnailImageUrl,
-      userIcon: friend.userIcon,
-      imageUrl: friend.imageUrl,
     );
   }
 
   factory _FriendEntry.fromWsUser(
     User user, {
+    required UserStatus status,
+    required String location,
+    required String lastPlatform,
+  }) {
+    final limited = user.toLimitedUser();
+    return _FriendEntry(
+      id: limited.id,
+      displayName: limited.displayName,
+      status: status,
+      location: location,
+      lastPlatform: lastPlatform,
+      tags: limited.tags,
+      bio: limited.bio,
+      statusDescription: _normalizeText(limited.statusDescription),
+      pronouns: _normalizeText(limited.pronouns),
+      bioLinks: _normalizeBioLinks(limited.bioLinks),
+      dateJoined: limited.dateJoined,
+      lastActivity: limited.lastActivity ?? limited.lastLogin,
+      profilePicOverrideThumbnail: limited.profilePicOverrideThumbnail,
+      profilePicOverride: limited.profilePicOverride,
+      currentAvatarThumbnailImageUrl: limited.currentAvatarThumbnailImageUrl,
+      userIcon: limited.userIcon,
+      imageUrl: limited.imageUrl ?? limited.currentAvatarImageUrl,
+    );
+  }
+
+  factory _FriendEntry.fromLimitedUser(
+    LimitedUser user, {
     required UserStatus status,
     required String location,
     required String lastPlatform,
@@ -820,21 +919,36 @@ class _FriendEntry {
       status: status,
       location: location,
       lastPlatform: lastPlatform,
-      tags: _normalizeTags(user.tags),
+      tags: user.tags,
       bio: user.bio,
+      statusDescription: _normalizeText(user.statusDescription),
+      pronouns: _normalizeText(user.pronouns),
+      bioLinks: _normalizeBioLinks(user.bioLinks),
+      dateJoined: user.dateJoined,
+      lastActivity: user.lastActivity ?? user.lastLogin,
       profilePicOverrideThumbnail: user.profilePicOverrideThumbnail,
       profilePicOverride: user.profilePicOverride,
       currentAvatarThumbnailImageUrl: user.currentAvatarThumbnailImageUrl,
       userIcon: user.userIcon,
-      imageUrl: user.currentAvatarImageUrl,
+      imageUrl: user.imageUrl ?? user.currentAvatarImageUrl,
     );
   }
 
-  static List<String> _normalizeTags(Object? rawTags) {
-    if (rawTags is List) {
-      return rawTags.whereType<String>().toList();
-    }
-    return const [];
+  static String? _normalizeText(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return null;
+    return trimmed;
+  }
+
+  static List<String> _normalizeBioLinks(List<String>? rawLinks) {
+    if (rawLinks == null || rawLinks.isEmpty) return const [];
+    final sanitized = rawLinks
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    if (sanitized.isEmpty) return const [];
+    return sanitized;
   }
 
   final String id;
@@ -844,6 +958,11 @@ class _FriendEntry {
   final String lastPlatform;
   final List<String> tags;
   final String? bio;
+  final String? statusDescription;
+  final String? pronouns;
+  final List<String> bioLinks;
+  final DateTime? dateJoined;
+  final DateTime? lastActivity;
   final String? profilePicOverrideThumbnail;
   final String? profilePicOverride;
   final String? currentAvatarThumbnailImageUrl;
@@ -863,6 +982,11 @@ class _FriendEntry {
       lastPlatform: lastPlatform ?? this.lastPlatform,
       tags: tags,
       bio: bio,
+      statusDescription: statusDescription,
+      pronouns: pronouns,
+      bioLinks: bioLinks,
+      dateJoined: dateJoined,
+      lastActivity: lastActivity,
       profilePicOverrideThumbnail: profilePicOverrideThumbnail,
       profilePicOverride: profilePicOverride,
       currentAvatarThumbnailImageUrl: currentAvatarThumbnailImageUrl,
@@ -892,10 +1016,14 @@ class _FriendEntry {
 
   Color get trustColor {
     final trustTags = tags.map((e) => e.toLowerCase()).toSet();
-    if (trustTags.contains('system_trust_veteran')) return const Color(0xFF8E44AD);
-    if (trustTags.contains('system_trust_trusted')) return const Color(0xFFFF9800);
-    if (trustTags.contains('system_trust_known')) return const Color(0xFF4CAF50);
-    if (trustTags.contains('system_trust_basic')) return const Color(0xFF64B5F6);
+    if (trustTags.contains('system_trust_veteran'))
+      return const Color(0xFF8E44AD);
+    if (trustTags.contains('system_trust_trusted'))
+      return const Color(0xFFFF9800);
+    if (trustTags.contains('system_trust_known'))
+      return const Color(0xFF4CAF50);
+    if (trustTags.contains('system_trust_basic'))
+      return const Color(0xFF64B5F6);
     return Colors.grey;
   }
 }
@@ -919,13 +1047,16 @@ class _FriendRow extends StatelessWidget {
 
     return ListTile(
       onTap: onTap,
-      leading: _Avatar(imageUrl: friend.smallAvatarUrl, dio: dio),
+      leading: VrcAvatar(imageUrl: friend.smallAvatarUrl, dio: dio),
       title: Row(
         children: [
           Expanded(
             child: Text(
               friend.displayName,
-              style: TextStyle(color: friend.trustColor, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: friend.trustColor,
+                fontWeight: FontWeight.w600,
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -985,138 +1116,6 @@ class _FavoriteFriendGroupView {
   final String name;
   final String displayName;
   final Set<String> friendIds;
-}
-
-class _Avatar extends StatefulWidget {
-  const _Avatar({required this.dio, this.imageUrl});
-
-  final Dio dio;
-  final String? imageUrl;
-
-  @override
-  State<_Avatar> createState() => _AvatarState();
-}
-
-class _AvatarState extends State<_Avatar> {
-  static final Set<String> _logged403Urls = <String>{};
-  static final Map<String, Uint8List> _memoryAvatarCache = {};
-  static Future<io.Directory>? _cacheDirFuture;
-
-  late Future<Uint8List?> _avatarFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _avatarFuture = _loadAvatar();
-  }
-
-  @override
-  void didUpdateWidget(covariant _Avatar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.imageUrl != widget.imageUrl) {
-      _avatarFuture = _loadAvatar();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.imageUrl == null) {
-      return const CircleAvatar(child: Icon(Icons.person));
-    }
-
-    return CircleAvatar(
-      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: FutureBuilder<Uint8List?>(
-        future: _avatarFuture,
-        builder: (context, snapshot) {
-          final bytes = snapshot.data;
-          if (bytes == null || bytes.isEmpty) {
-            return const Icon(Icons.person);
-          }
-
-          return ClipOval(
-            child: Image.memory(
-              bytes,
-              width: 40,
-              height: 40,
-              fit: BoxFit.cover,
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Future<Uint8List?> _loadAvatar() async {
-    final url = widget.imageUrl;
-    if (url == null || url.isEmpty) return null;
-
-    final cachedInMemory = _memoryAvatarCache[url];
-    if (cachedInMemory != null && cachedInMemory.isNotEmpty) {
-      return cachedInMemory;
-    }
-
-    final cacheFile = await _cacheFileForUrl(url);
-    if (await cacheFile.exists()) {
-      final bytes = await cacheFile.readAsBytes();
-      if (bytes.isNotEmpty) {
-        _memoryAvatarCache[url] = bytes;
-        return bytes;
-      }
-    }
-
-    try {
-      final response = await widget.dio.get<List<int>>(
-        url,
-        options: WebClient.withUserAgent(
-          responseType: ResponseType.bytes,
-          validateStatus: (_) => true,
-        ),
-      );
-
-      final statusCode = response.statusCode ?? 0;
-      if (statusCode == 200 && response.data != null) {
-        final bytes = Uint8List.fromList(response.data!);
-        _memoryAvatarCache[url] = bytes;
-        await cacheFile.writeAsBytes(bytes, flush: true);
-        return bytes;
-      }
-
-      if (statusCode == 403 && !_logged403Urls.contains(url)) {
-        _logged403Urls.add(url);
-        final body = _decodeBody(response.data);
-        debugPrint('Avatar 403 URL: $url');
-        debugPrint('Avatar 403 BODY: $body');
-      }
-    } catch (e) {
-      debugPrint('Avatar request failed: $e');
-    }
-
-    return null;
-  }
-
-  Future<io.File> _cacheFileForUrl(String url) async {
-    _cacheDirFuture ??= _initCacheDir();
-    final dir = await _cacheDirFuture!;
-    final key = sha1.convert(utf8.encode(url)).toString();
-    return io.File('${dir.path}/$key.img');
-  }
-
-  Future<io.Directory> _initCacheDir() async {
-    final tempDir = await getTemporaryDirectory();
-    final dir = io.Directory('${tempDir.path}/avatar_cache');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
-  }
-
-  String _decodeBody(List<int>? data) {
-    if (data == null || data.isEmpty) return '<empty>';
-    final body = utf8.decode(data, allowMalformed: true).trim();
-    if (body.isEmpty) return '<empty>';
-    return body.length > 1200 ? '${body.substring(0, 1200)}...(truncated)' : body;
-  }
 }
 
 class _StatusMeta {

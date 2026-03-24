@@ -1,0 +1,56 @@
+{
+  "ageVerificationStatus": "hidden",
+  "ageVerified": true,
+  "allowAvatarCopying": true,
+  "badges": [
+    {
+      "assignedAt": "2019-08-24T14:15:22Z",
+      "badgeDescription": "string",
+      "badgeId": "bdg_a60e514a-8cb7-4702-8f24-2786992be1a8",
+      "badgeImageUrl": "string",
+      "badgeName": "string",
+      "hidden": true,
+      "showcased": true,
+      "updatedAt": "2019-08-24T14:15:22Z"
+    }
+  ],
+  "bio": "string",
+  "bioLinks": [
+    "string"
+  ],
+  "currentAvatarImageUrl": "https://api.vrchat.cloud/api/1/file/file_ae46d521-7281-4b38-b365-804b32a1d6a7/1/file",
+  "currentAvatarThumbnailImageUrl": "https://api.vrchat.cloud/api/1/image/file_aae83ed9-d42d-4d72-9f4b-9f1e41ed17e1/1/256",
+  "currentAvatarTags": [
+    "string"
+  ],
+  "date_joined": "2019-08-24",
+  "developerType": "none",
+  "displayName": "string",
+  "friendKey": "string",
+  "friendRequestStatus": "string",
+  "id": "usr_c1644b5b-3ca4-45b4-97c6-a2a0de70d469",
+  "instanceId": "12345~hidden(usr_c1644b5b-3ca4-45b4-97c6-a2a0de70d469)~region(eu)~nonce(27e8414a-59a0-4f3d-af1f-f27557eb49a2)",
+  "isFriend": true,
+  "last_activity": "string",
+  "last_login": "string",
+  "last_mobile": "string",
+  "last_platform": "standalonewindows",
+  "location": "wrld_4432ea9b-729c-46e3-8eaf-846aa0a37fdd:12345~hidden(usr_c1644b5b-3ca4-45b4-97c6-a2a0de70d469)~region(eu)~nonce(27e8414a-59a0-4f3d-af1f-f27557eb49a2)",
+  "note": "string",
+  "platform": "string",
+  "profilePicOverride": "string",
+  "profilePicOverrideThumbnail": "string",
+  "pronouns": "string",
+  "state": "offline",
+  "status": "active",
+  "statusDescription": "string",
+  "tags": [
+    "string"
+  ],
+  "travelingToInstance": "string",
+  "travelingToLocation": "string",
+  "travelingToWorld": "string",
+  "userIcon": "string",
+  "username": "string",
+  "worldId": "wrld_4432ea9b-729c-46e3-8eaf-846aa0a37fdd"
+}
