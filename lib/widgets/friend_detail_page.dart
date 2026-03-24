@@ -420,15 +420,17 @@ class _CollapsingHeader extends StatelessWidget {
             if (imageOpacity > 0)
               Opacity(
                 opacity: imageOpacity,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.black.withValues(alpha: 0.15),
-                        Colors.black.withValues(alpha: 0.45),
-                      ],
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.15),
+                          Colors.black.withValues(alpha: 0.45),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -551,6 +553,7 @@ class _HeaderImage extends StatelessWidget {
     }
 
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: VrcNetworkImage(
         dio: dio,

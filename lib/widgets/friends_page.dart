@@ -418,6 +418,32 @@ class _FriendsPageState extends State<FriendsPage> {
     return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
   }
 
+  int _statusPriorityForGroup(UserStatus status) {
+    switch (status) {
+      case UserStatus.joinMe:
+        return 0; // blue
+      case UserStatus.active:
+        return 1; // green
+      case UserStatus.askMe:
+        return 2; // orange
+      case UserStatus.busy:
+        return 3; // red
+      case UserStatus.offline:
+        return 4; // gray
+    }
+  }
+
+  List<_FriendEntry> _sortedForGroup(List<_FriendEntry> friends) {
+    final sorted = [...friends];
+    sorted.sort((a, b) {
+      final aPriority = _statusPriorityForGroup(a.status);
+      final bPriority = _statusPriorityForGroup(b.status);
+      if (aPriority != bPriority) return aPriority.compareTo(bPriority);
+      return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
+    });
+    return sorted;
+  }
+
   int _onlineFavoritePriority(String friendId) {
     for (var i = 0; i < _favoriteFriendGroups.length; i++) {
       if (_favoriteFriendGroups[i].friendIds.contains(friendId)) {
@@ -534,13 +560,14 @@ class _FriendsPageState extends State<FriendsPage> {
     required bool expanded,
     required ValueChanged<bool> onExpansionChanged,
   }) {
+    final sortedFriends = _sortedForGroup(friends);
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: ExpansionTile(
         initiallyExpanded: expanded,
         onExpansionChanged: onExpansionChanged,
         title: Text('$title (${friends.length})'),
-        children: _buildFriendRows(friends),
+        children: _buildFriendRows(sortedFriends),
       ),
     );
   }
@@ -550,15 +577,10 @@ class _FriendsPageState extends State<FriendsPage> {
     final assignedFriendIds = <String>{};
 
     for (final favoriteGroup in _favoriteFriendGroups) {
-      final members =
-          onlineFriends
-              .where((f) => favoriteGroup.friendIds.contains(f.id))
-              .toList()
-            ..sort(
-              (a, b) => a.displayName.toLowerCase().compareTo(
-                b.displayName.toLowerCase(),
-              ),
-            );
+      final members = onlineFriends
+          .where((f) => favoriteGroup.friendIds.contains(f.id))
+          .toList();
+      final sortedMembers = _sortedForGroup(members);
       assignedFriendIds.addAll(members.map((m) => m.id));
 
       favoriteSections.add(
@@ -571,18 +593,14 @@ class _FriendsPageState extends State<FriendsPage> {
             });
           },
           title: Text('${favoriteGroup.displayName} (${members.length})'),
-          children: _buildFriendRows(members),
+          children: _buildFriendRows(sortedMembers),
         ),
       );
     }
 
-    final others =
-        onlineFriends.where((f) => !assignedFriendIds.contains(f.id)).toList()
-          ..sort(
-            (a, b) => a.displayName.toLowerCase().compareTo(
-              b.displayName.toLowerCase(),
-            ),
-          );
+    final others = _sortedForGroup(
+      onlineFriends.where((f) => !assignedFriendIds.contains(f.id)).toList(),
+    );
 
     if (favoriteSections.isNotEmpty) {
       favoriteSections.add(
@@ -593,7 +611,7 @@ class _FriendsPageState extends State<FriendsPage> {
         ),
       );
     } else {
-      favoriteSections.addAll(_buildFriendRows(onlineFriends));
+      favoriteSections.addAll(_buildFriendRows(_sortedForGroup(onlineFriends)));
     }
 
     return Card(
@@ -1047,29 +1065,16 @@ class _FriendRow extends StatelessWidget {
 
     return ListTile(
       onTap: onTap,
-      leading: VrcAvatar(imageUrl: friend.smallAvatarUrl, dio: dio),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              friend.displayName,
-              style: TextStyle(
-                color: friend.trustColor,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            statusMeta.label,
-            style: TextStyle(
-              color: statusMeta.color,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
+      leading: _AvatarWithStatusDot(
+        dio: dio,
+        imageUrl: friend.smallAvatarUrl,
+        statusColor: statusMeta.color,
+      ),
+      title: Text(
+        friend.displayName,
+        style: TextStyle(color: friend.trustColor, fontWeight: FontWeight.w600),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 4),
@@ -1081,16 +1086,55 @@ class _FriendRow extends StatelessWidget {
   _StatusMeta _statusMeta(UserStatus status) {
     switch (status) {
       case UserStatus.joinMe:
-        return const _StatusMeta(label: 'joinMe', color: Colors.blue);
+        return const _StatusMeta(color: Colors.blue);
       case UserStatus.active:
-        return const _StatusMeta(label: 'online', color: Colors.green);
+        return const _StatusMeta(color: Colors.green);
       case UserStatus.askMe:
-        return const _StatusMeta(label: 'askMe', color: Colors.orange);
+        return const _StatusMeta(color: Colors.orange);
       case UserStatus.busy:
-        return const _StatusMeta(label: 'noDisturb', color: Colors.red);
+        return const _StatusMeta(color: Colors.red);
       case UserStatus.offline:
-        return const _StatusMeta(label: 'offline', color: Colors.grey);
+        return const _StatusMeta(color: Colors.grey);
     }
+  }
+}
+
+class _AvatarWithStatusDot extends StatelessWidget {
+  const _AvatarWithStatusDot({
+    required this.dio,
+    required this.imageUrl,
+    required this.statusColor,
+  });
+
+  final Dio dio;
+  final String? imageUrl;
+  final Color statusColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = Theme.of(context).colorScheme.surface;
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Stack(
+        children: [
+          VrcAvatar(imageUrl: imageUrl, dio: dio),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: statusColor,
+                shape: BoxShape.circle,
+                border: Border.all(color: borderColor, width: 1.8),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -1119,8 +1163,6 @@ class _FavoriteFriendGroupView {
 }
 
 class _StatusMeta {
-  const _StatusMeta({required this.label, required this.color});
-
-  final String label;
+  const _StatusMeta({required this.color});
   final Color color;
 }
