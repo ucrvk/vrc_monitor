@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
-import 'package:vrc_monitor/widgets/friends_page.dart';
+import 'package:vrc_monitor/widgets/main_shell.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -116,7 +116,7 @@ class _LoginPageState extends State<LoginPage> {
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
-          builder: (_) => FriendsPage(api: api, currentUser: user),
+          builder: (_) => MainShell(api: api, currentUser: user),
         ),
       );
     } catch (e) {

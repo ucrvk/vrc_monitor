@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/widgets/login_page.dart';
 import 'package:vrc_monitor/widgets/settings_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
 
 class MePage extends StatefulWidget {
-  const MePage({super.key, required this.api, required this.currentUser});
+  const MePage({super.key, required this.api, required this.currentUser, this.onLogout});
 
   final VrchatDart api;
   final CurrentUser currentUser;
+  final VoidCallback? onLogout;
 
   @override
   State<MePage> createState() => _MePageState();
@@ -29,9 +31,20 @@ class _MePageState extends State<MePage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("我"),
+        actions: [
+          IconButton(
+            onPressed: _logout,
+            tooltip: '退出登录',
+            icon: const Icon(Icons.logout),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -112,6 +125,7 @@ class _MePageState extends State<MePage> {
           ),
         ),
       ],
+      ),
     );
   }
 
@@ -299,7 +313,7 @@ class _MePageState extends State<MePage> {
       if (success == null) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('更新失败: ${failure?.error ?? '未知错误'}')));
+        ).showSnackBar(SnackBar(content: Text('更新失败：${failure?.error ?? '未知错误'}')));
         return;
       }
       setState(() {
@@ -318,6 +332,16 @@ class _MePageState extends State<MePage> {
   Future<void> _openSettingsPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+    );
+  }
+
+  Future<void> _logout() async {
+    widget.onLogout?.call();
+    await widget.api.auth.logout();
+    if (!mounted) return;
+    await Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      (route) => false,
     );
   }
 

@@ -6,8 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/friend_search_page.dart';
-import 'package:vrc_monitor/widgets/login_page.dart';
-import 'package:vrc_monitor/widgets/me_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
 
 class FriendsPage extends StatefulWidget {
@@ -25,7 +23,6 @@ class _FriendsPageState extends State<FriendsPage> {
 
   bool _loading = true;
   String? _error;
-  int _currentTabIndex = 0;
   List<_FriendEntry> _friends = const [];
   final Map<String, String> _worldNameById = {};
   final Map<String, String> _instanceTypeByLocation = {};
@@ -37,19 +34,16 @@ class _FriendsPageState extends State<FriendsPage> {
   bool _offlineExpanded = false;
   List<_FavoriteFriendGroupView> _favoriteFriendGroups = const [];
   final Map<String, bool> _favoriteGroupExpandedByName = {};
-  late final PageController _pageController;
 
   @override
   void initState() {
     super.initState();
-    _pageController = PageController(initialPage: _currentTabIndex);
     _startStreamingSync();
     _loadFriends();
   }
 
   @override
   void dispose() {
-    _pageController.dispose();
     _refreshCooldownTimer?.cancel();
     _wsSubscription?.cancel();
     widget.api.streaming.stop();
@@ -260,17 +254,6 @@ class _FriendsPageState extends State<FriendsPage> {
     return status == 429 || status >= 500;
   }
 
-  Future<void> _logout() async {
-    _wsSubscription?.cancel();
-    widget.api.streaming.stop();
-    await widget.api.auth.logout();
-    if (!mounted) return;
-    await Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(builder: (_) => const LoginPage()),
-      (route) => false,
-    );
-  }
-
   void _startStreamingSync() {
     _wsSubscription = widget.api.streaming.vrcEventStream.listen(
       _onWsEvent,
@@ -461,69 +444,25 @@ class _FriendsPageState extends State<FriendsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_currentTabIndex == 0 ? '好友位置 (${_friends.length})' : '我'),
+        title: Text('好友位置 (${_friends.length})'),
         actions: [
-          if (_currentTabIndex == 0)
-            IconButton(
-              onPressed: _loading ? null : _openFriendSearchPage,
-              tooltip: '搜索好友',
-              icon: const Icon(Icons.search),
-            ),
-          if (_currentTabIndex == 0)
-            IconButton(
-              onPressed: _loading || _refreshCooldownSeconds > 0
-                  ? null
-                  : _onRefreshPressed,
-              tooltip: _refreshCooldownSeconds > 0
-                  ? '刷新 (${_refreshCooldownSeconds}s)'
-                  : '刷新',
-              icon: const Icon(Icons.refresh),
-            ),
-          if (_currentTabIndex == 1)
-            IconButton(
-              onPressed: _logout,
-              tooltip: '退出登录',
-              icon: const Icon(Icons.logout),
-            ),
-        ],
-      ),
-      body: PageView(
-        controller: _pageController,
-        onPageChanged: (index) {
-          setState(() {
-            _currentTabIndex = index;
-          });
-        },
-        children: [
-          _buildFriendsBody(),
-          MePage(api: widget.api, currentUser: widget.currentUser),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentTabIndex,
-        onDestinationSelected: (index) {
-          _pageController.animateToPage(
-            index,
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-          );
-          setState(() {
-            _currentTabIndex = index;
-          });
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.location_on_outlined),
-            selectedIcon: Icon(Icons.location_on),
-            label: '好友位置',
+          IconButton(
+            onPressed: _loading ? null : _openFriendSearchPage,
+            tooltip: '搜索好友',
+            icon: const Icon(Icons.search),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: '我',
+          IconButton(
+            onPressed: _loading || _refreshCooldownSeconds > 0
+                ? null
+                : _onRefreshPressed,
+            tooltip: _refreshCooldownSeconds > 0
+                ? '刷新 (${_refreshCooldownSeconds}s)'
+                : '刷新',
+            icon: const Icon(Icons.refresh),
           ),
         ],
       ),
+      body: _buildFriendsBody(),
     );
   }
 
