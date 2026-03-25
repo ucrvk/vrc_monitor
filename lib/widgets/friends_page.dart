@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/cache_manager.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/friend_search_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
@@ -20,6 +21,7 @@ class FriendsPage extends StatefulWidget {
 
 class _FriendsPageState extends State<FriendsPage> {
   static const int _pageSize = 100;
+  final CacheManager _cacheManager = CacheManager.instance;
 
   bool _loading = true;
   String? _error;
@@ -38,6 +40,7 @@ class _FriendsPageState extends State<FriendsPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_hydrateFromCache());
     _startStreamingSync();
     _loadFriends();
   }
@@ -50,7 +53,7 @@ class _FriendsPageState extends State<FriendsPage> {
     super.dispose();
   }
 
-  Future<void> _loadFriends() async {
+  Future<void> _loadFriends({bool forceRefresh = false}) async {
     setState(() {
       _loading = true;
       _error = null;
@@ -58,7 +61,9 @@ class _FriendsPageState extends State<FriendsPage> {
 
     final onlineFuture = _fetchAllFriends(offline: false);
     final offlineFuture = _fetchAllFriends(offline: true);
-    final favoritesFuture = _fetchFavoriteFriendGroups();
+    final favoritesFuture = _fetchFavoriteFriendGroups(
+      forceRefresh: forceRefresh,
+    );
 
     final (onlineFriends, onlineFailure) = await onlineFuture;
     final (offlineFriends, offlineFailure) = await offlineFuture;
@@ -82,9 +87,17 @@ class _FriendsPageState extends State<FriendsPage> {
       merged[friend.id] = friend;
     }
 
-    final friends =
-        merged.values.map(_FriendEntry.fromLimitedUserFriend).toList()
+    final friends = merged.values
+        .map(_FriendEntry.fromLimitedUserFriend)
+        .map(_applyCachedDisplayName)
+        .toList()
           ..sort(_sortFriends);
+
+    await _cacheManager.dataCache.setUserDisplayNameById({
+      ..._cacheManager.dataCache.userDisplayNameById,
+      for (final friend in friends)
+        if (friend.displayName.trim().isNotEmpty) friend.id: friend.displayName,
+    });
 
     setState(() {
       _loading = false;
@@ -95,6 +108,23 @@ class _FriendsPageState extends State<FriendsPage> {
     _syncFavoriteGroupExpansionState(favoriteFriendGroups);
 
     _resolveLocationDetails(friends);
+  }
+
+  Future<void> _hydrateFromCache() async {
+    await _cacheManager.dataCache.initialize();
+    if (!mounted) return;
+
+    final cachedFavoriteGroups = _favoriteGroupsFromCache();
+    setState(() {
+      _favoriteFriendGroups = cachedFavoriteGroups;
+      _worldNameById
+        ..clear()
+        ..addAll(_cacheManager.dataCache.worldNameById);
+      _instanceTypeByLocation
+        ..clear()
+        ..addAll(_cacheManager.dataCache.instanceTypeByLocation);
+    });
+    _syncFavoriteGroupExpansionState(cachedFavoriteGroups);
   }
 
   Future<(List<LimitedUserFriend>, InvalidResponse?)> _fetchAllFriends({
@@ -127,14 +157,21 @@ class _FriendsPageState extends State<FriendsPage> {
     return (result, lastFailure);
   }
 
-  Future<List<_FavoriteFriendGroupView>> _fetchFavoriteFriendGroups() async {
+  Future<List<_FavoriteFriendGroupView>> _fetchFavoriteFriendGroups({
+    bool forceRefresh = false,
+  }) async {
+    final cached = _favoriteGroupsFromCache();
+    if (!forceRefresh && cached.isNotEmpty) {
+      return cached;
+    }
+
     final (groupsSuccess, _) = await _runVrcRequest(
       () => widget.api.rawApi
           .getFavoritesApi()
           .getFavoriteGroups(n: 100)
           .validateVrc(),
     );
-    if (groupsSuccess == null) return const [];
+    if (groupsSuccess == null) return cached;
 
     final friendGroups =
         groupsSuccess.data.where((g) => g.type == FavoriteType.friend).toList()
@@ -143,7 +180,7 @@ class _FriendsPageState extends State<FriendsPage> {
               b.displayName.toLowerCase(),
             ),
           );
-    if (friendGroups.isEmpty) return const [];
+    if (friendGroups.isEmpty) return cached;
 
     final friendIdsByGroupName = <String, Set<String>>{
       for (final group in friendGroups) group.name: <String>{},
@@ -173,7 +210,49 @@ class _FriendsPageState extends State<FriendsPage> {
       offset += page.length;
     }
 
-    return friendGroups
+    final result = friendGroups
+        .map(
+          (group) => _FavoriteFriendGroupView(
+            name: group.name,
+            displayName: group.displayName,
+            friendIds: friendIdsByGroupName[group.name] ?? const {},
+          ),
+        )
+        .toList();
+
+    await _cacheManager.dataCache.setFavoriteGroups(
+      friendGroups
+          .map(
+            (group) => CachedFavoriteGroup(
+              name: group.name,
+              displayName: group.displayName,
+            ),
+          )
+          .toList(),
+    );
+    await _cacheManager.dataCache.setUserFavoriteGroups(friendIdsByGroupName);
+
+    return result;
+  }
+
+  List<_FavoriteFriendGroupView> _favoriteGroupsFromCache() {
+    final groups = _cacheManager.dataCache.favoriteGroups;
+    final userMap = _cacheManager.dataCache.userFavoriteGroups;
+    if (groups.isEmpty) return const [];
+
+    final friendIdsByGroupName = <String, Set<String>>{
+      for (final group in groups) group.name: <String>{},
+    };
+    for (final entry in userMap.entries) {
+      for (final groupName in entry.value) {
+        final set = friendIdsByGroupName[groupName];
+        if (set != null) {
+          set.add(entry.key);
+        }
+      }
+    }
+
+    return groups
         .map(
           (group) => _FavoriteFriendGroupView(
             name: group.name,
@@ -343,11 +422,16 @@ class _FriendsPageState extends State<FriendsPage> {
   }) {
     final index = _friends.indexWhere((f) => f.id == user.id);
     final location = (locationOverride ?? user.location ?? 'offline').trim();
-    final updated = _FriendEntry.fromWsUser(
+    final updated = _applyCachedDisplayName(
+      _FriendEntry.fromWsUser(
       user,
       status: statusOverride,
       location: location.isEmpty ? 'offline' : location,
       lastPlatform: platformOverride ?? user.lastPlatform,
+    ));
+
+    unawaited(
+      _cacheManager.dataCache.putUserDisplayName(updated.id, updated.displayName),
     );
 
     if (index == -1) {
@@ -613,7 +697,7 @@ class _FriendsPageState extends State<FriendsPage> {
 
   Future<void> _onRefreshPressed() async {
     _startRefreshCooldown();
-    await _loadFriends();
+    await _loadFriends(forceRefresh: true);
   }
 
   Future<void> _openFriendSearchPage() async {
@@ -776,6 +860,10 @@ class _FriendsPageState extends State<FriendsPage> {
       changed = true;
     }
 
+    if (changed) {
+      await _cacheManager.dataCache.setWorldNameById(_worldNameById);
+    }
+
     final instanceResults = await Future.wait([
       for (final (raw, worldId, instanceId) in worldInstances)
         _runVrcRequest(
@@ -787,19 +875,38 @@ class _FriendsPageState extends State<FriendsPage> {
     ]);
 
     if (!mounted) return;
+    var instanceChanged = false;
     for (final (raw, success) in instanceResults) {
       if (success != null) {
         _instanceTypeByLocation[raw] = _instanceTypeLabel(
           success.data.type,
           canRequestInvite: success.data.canRequestInvite ?? false,
         );
+        instanceChanged = true;
       }
       changed = true;
+    }
+
+    if (instanceChanged) {
+      await _cacheManager.dataCache.setInstanceTypeByLocation(
+        _instanceTypeByLocation,
+      );
     }
 
     if (changed && mounted) {
       setState(() {});
     }
+  }
+
+  _FriendEntry _applyCachedDisplayName(_FriendEntry friend) {
+    final cached = _cacheManager.dataCache.displayName(friend.id);
+    if (cached == null || cached.trim().isEmpty) {
+      return friend;
+    }
+    if (cached.trim() == friend.displayName.trim()) {
+      return friend;
+    }
+    return friend.copyWith(displayName: cached.trim());
   }
 
   String _locationTextFor(_FriendEntry friend) {
@@ -1015,13 +1122,14 @@ class _FriendEntry {
   final String? imageUrl;
 
   _FriendEntry copyWith({
+    String? displayName,
     UserStatus? status,
     String? location,
     String? lastPlatform,
   }) {
     return _FriendEntry(
       id: id,
-      displayName: displayName,
+      displayName: displayName ?? this.displayName,
       status: status ?? this.status,
       location: location ?? this.location,
       lastPlatform: lastPlatform ?? this.lastPlatform,

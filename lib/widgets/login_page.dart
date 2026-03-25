@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/cache_manager.dart';
 import 'package:vrc_monitor/widgets/main_shell.dart';
 
 class LoginPage extends StatefulWidget {
@@ -112,6 +113,9 @@ class _LoginPageState extends State<LoginPage> {
       }
 
       await _persistCredentials();
+      _setMessage('登录成功，正在预加载缓存...', isError: false);
+
+      await CacheManager.instance.initialize(api: api, currentUser: user);
 
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(

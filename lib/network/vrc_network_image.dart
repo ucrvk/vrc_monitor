@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:vrc_monitor/network/web_client.dart';
+import 'package:vrc_monitor/services/cache_manager.dart';
 
 class VrcNetworkImage extends StatefulWidget {
   const VrcNetworkImage({
@@ -34,6 +35,13 @@ class VrcNetworkImage extends StatefulWidget {
     final url = imageUrl?.trim() ?? '';
     if (url.isEmpty) return null;
 
+    final unifiedCache = CacheManager.instance.imageCache;
+    final unifiedBytes = await unifiedCache.getByUrl(url);
+    if (unifiedBytes != null && unifiedBytes.isNotEmpty) {
+      _memoryCache[url] = unifiedBytes;
+      return unifiedBytes;
+    }
+
     final cached = _memoryCache[url];
     if (cached != null && cached.isNotEmpty) return cached;
 
@@ -47,6 +55,14 @@ class VrcNetworkImage extends StatefulWidget {
     }
 
     try {
+      await unifiedCache.cacheByUrl(dio: dio, imageUrl: url);
+      final fresh = await unifiedCache.getByUrl(url);
+      if (fresh != null && fresh.isNotEmpty) {
+        _memoryCache[url] = fresh;
+        await cacheFile.writeAsBytes(fresh, flush: true);
+        return fresh;
+      }
+
       final response = await WebClient.getWithUserAgent<List<int>>(
         dio: dio,
         url: url,
