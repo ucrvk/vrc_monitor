@@ -1,10 +1,11 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
+import 'package:vrc_monitor/widgets/friend_search_page.dart';
 import 'package:vrc_monitor/widgets/login_page.dart';
 import 'package:vrc_monitor/widgets/me_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
@@ -36,16 +37,19 @@ class _FriendsPageState extends State<FriendsPage> {
   bool _offlineExpanded = false;
   List<_FavoriteFriendGroupView> _favoriteFriendGroups = const [];
   final Map<String, bool> _favoriteGroupExpandedByName = {};
+  late final PageController _pageController;
 
   @override
   void initState() {
     super.initState();
+    _pageController = PageController(initialPage: _currentTabIndex);
     _startStreamingSync();
     _loadFriends();
   }
 
   @override
   void dispose() {
+    _pageController.dispose();
     _refreshCooldownTimer?.cancel();
     _wsSubscription?.cancel();
     widget.api.streaming.stop();
@@ -461,6 +465,12 @@ class _FriendsPageState extends State<FriendsPage> {
         actions: [
           if (_currentTabIndex == 0)
             IconButton(
+              onPressed: _loading ? null : _openFriendSearchPage,
+              tooltip: '搜索好友',
+              icon: const Icon(Icons.search),
+            ),
+          if (_currentTabIndex == 0)
+            IconButton(
               onPressed: _loading || _refreshCooldownSeconds > 0
                   ? null
                   : _onRefreshPressed,
@@ -477,8 +487,13 @@ class _FriendsPageState extends State<FriendsPage> {
             ),
         ],
       ),
-      body: IndexedStack(
-        index: _currentTabIndex,
+      body: PageView(
+        controller: _pageController,
+        onPageChanged: (index) {
+          setState(() {
+            _currentTabIndex = index;
+          });
+        },
         children: [
           _buildFriendsBody(),
           MePage(currentUser: widget.currentUser),
@@ -487,6 +502,11 @@ class _FriendsPageState extends State<FriendsPage> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentTabIndex,
         onDestinationSelected: (index) {
+          _pageController.animateToPage(
+            index,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+          );
           setState(() {
             _currentTabIndex = index;
           });
@@ -657,7 +677,51 @@ class _FriendsPageState extends State<FriendsPage> {
     await _loadFriends();
   }
 
-  Future<void> _openFriendDetailPage(_FriendEntry friend) async {
+  Future<void> _openFriendSearchPage() async {
+    final searchUsers = _friends.map(_toSearchUser).toList();
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FriendSearchPage(
+          friends: searchUsers,
+          dio: widget.api.rawApi.dio,
+          rawApi: widget.api.rawApi,
+          onOpenDetail: _openFriendDetailFromSearchUser,
+        ),
+      ),
+    );
+  }
+
+  FriendSearchUser _toSearchUser(_FriendEntry friend) {
+    return FriendSearchUser(
+      id: friend.id,
+      displayName: friend.displayName,
+      status: friend.status,
+      location: friend.location,
+      locationText: _locationTextFor(friend),
+      lastPlatform: friend.lastPlatform,
+      tags: friend.tags,
+      bio: friend.bio,
+      statusDescription: friend.statusDescription,
+      pronouns: friend.pronouns,
+      bioLinks: friend.bioLinks,
+      dateJoined: friend.dateJoined,
+      lastActivity: friend.lastActivity,
+      profilePicOverrideThumbnail: friend.profilePicOverrideThumbnail,
+      profilePicOverride: friend.profilePicOverride,
+      currentAvatarThumbnailImageUrl: friend.currentAvatarThumbnailImageUrl,
+      userIcon: friend.userIcon,
+      imageUrl: friend.imageUrl,
+      isFriend: true,
+    );
+  }
+
+  Future<void> _openFriendDetailFromSearchUser(FriendSearchUser user) async {
+    final index = _friends.indexWhere((f) => f.id == user.id);
+    final entry = index >= 0 ? _friends[index] : _FriendEntry.fromSearchUser(user);
+    await _openFriendDetailPage(entry, isFriend: user.isFriend);
+  }
+
+  Future<void> _openFriendDetailPage(_FriendEntry friend, {bool isFriend = true}) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => FriendDetailPage(
@@ -666,6 +730,8 @@ class _FriendsPageState extends State<FriendsPage> {
           displayName: friend.displayName,
           avatarUrl: friend.smallAvatarUrl,
           imageUrl: friend.imageUrl,
+          location: friend.location,
+          isFriend: isFriend,
           bio: friend.bio,
           nameColor: friend.trustColor,
           status: friend.status,
@@ -952,6 +1018,28 @@ class _FriendEntry {
     );
   }
 
+  factory _FriendEntry.fromSearchUser(FriendSearchUser user) {
+    return _FriendEntry(
+      id: user.id,
+      displayName: user.displayName,
+      status: user.status,
+      location: user.location,
+      lastPlatform: user.lastPlatform,
+      tags: user.tags,
+      bio: user.bio,
+      statusDescription: user.statusDescription,
+      pronouns: user.pronouns,
+      bioLinks: user.bioLinks,
+      dateJoined: user.dateJoined,
+      lastActivity: user.lastActivity,
+      profilePicOverrideThumbnail: user.profilePicOverrideThumbnail,
+      profilePicOverride: user.profilePicOverride,
+      currentAvatarThumbnailImageUrl: user.currentAvatarThumbnailImageUrl,
+      userIcon: user.userIcon,
+      imageUrl: user.imageUrl,
+    );
+  }
+
   static String? _normalizeText(String? value) {
     final trimmed = value?.trim() ?? '';
     if (trimmed.isEmpty) return null;
@@ -1166,3 +1254,4 @@ class _StatusMeta {
   const _StatusMeta({required this.color});
   final Color color;
 }
+

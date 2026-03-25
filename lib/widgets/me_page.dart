@@ -1,9 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:package_info_plus/package_info_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
-import 'package:vrc_monitor/app_config.dart';
 import 'package:vrc_monitor/widgets/settings_page.dart';
 
 class MePage extends StatefulWidget {
@@ -16,14 +12,6 @@ class MePage extends StatefulWidget {
 }
 
 class _MePageState extends State<MePage> {
-  String _appVersion = '读取中...';
-
-  @override
-  void initState() {
-    super.initState();
-    _loadAppVersion();
-  }
-
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -50,97 +38,19 @@ class _MePageState extends State<MePage> {
         ),
         const SizedBox(height: 8),
         Card(
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.settings),
-                title: const Text('设置'),
-                onTap: _openSettingsPage,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: const Text('关于'),
-                onTap: _showAboutDialog,
-              ),
-            ],
+          child: ListTile(
+            leading: const Icon(Icons.settings),
+            title: const Text('设置'),
+            onTap: _openSettingsPage,
           ),
         ),
       ],
     );
   }
 
-  Future<void> _loadAppVersion() async {
-    try {
-      final info = await PackageInfo.fromPlatform();
-      if (!mounted) return;
-      setState(() {
-        _appVersion = '${info.version}+${info.buildNumber}';
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _appVersion = '未知版本';
-      });
-    }
-  }
-
   Future<void> _openSettingsPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
-    );
-  }
-
-  Future<void> _showAboutDialog() async {
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('关于'),
-          content: Text('当前版本: $_appVersion'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('关闭'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final launched = await _openProjectGithub();
-                if (dialogContext.mounted && launched) {
-                  Navigator.of(dialogContext).pop();
-                }
-              },
-              child: const Text('访问项目 GitHub'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<bool> _openProjectGithub() async {
-    try {
-      final config = await AppConfigLoader.load();
-      final launched = await launchUrl(
-        config.githubPageUri,
-        mode: LaunchMode.externalApplication,
-      );
-      if (launched) return true;
-      _showLaunchFailedMessage();
-      return false;
-    } on PlatformException {
-      _showLaunchFailedMessage();
-      return false;
-    } catch (_) {
-      _showLaunchFailedMessage();
-      return false;
-    }
-  }
-
-  void _showLaunchFailedMessage() {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('无法打开链接，请重启应用后重试。')),
     );
   }
 

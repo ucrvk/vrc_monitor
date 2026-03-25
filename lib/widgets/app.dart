@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:vrc_monitor/app_settings.dart';
 import 'package:vrc_monitor/update_checker.dart';
 import 'package:vrc_monitor/widgets/login_page.dart';
 
@@ -19,6 +20,7 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
   @override
   void initState() {
     super.initState();
+    AppThemeSettings.load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkUpdateInBackground();
     });
@@ -112,22 +114,27 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      navigatorKey: _navigatorKey,
-      title: 'VRChat Monitor',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
-      themeMode: ThemeMode.system,
-      home: const LoginPage(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: AppThemeSettings.themeModeNotifier,
+      builder: (context, themeMode, _) {
+        return MaterialApp(
+          navigatorKey: _navigatorKey,
+          title: 'VRChat Monitor',
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+            useMaterial3: true,
+          ),
+          darkTheme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: Colors.blue,
+              brightness: Brightness.dark,
+            ),
+            useMaterial3: true,
+          ),
+          themeMode: themeMode,
+          home: const LoginPage(),
+        );
+      },
     );
   }
 }
