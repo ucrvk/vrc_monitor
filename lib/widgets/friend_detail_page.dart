@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrchat_dart_generated/src/model/mutual_friend.dart';
 import 'package:vrc_monitor/network/vrc_network_image.dart';
 import 'package:vrc_monitor/network/web_client.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
@@ -68,11 +69,13 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     final api = widget.rawApi;
     User? user;
     FriendStatus? friendStatus;
+    List<MutualFriend>? mutualFriends;
     final needsUserFetch =
         api != null &&
         (widget.pronouns == null ||
             widget.dateJoined == null ||
-            widget.location == null);
+            widget.location == null ||
+            (widget.imageUrl?.trim().isEmpty ?? true));
 
     if (needsUserFetch) {
       try {
@@ -95,6 +98,19 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         friendStatus = success?.data;
       } catch (e) {
         debugPrint('Failed to fetch friend status: $e');
+      }
+    }
+
+    // Fetch mutual friends
+    if (api != null) {
+      try {
+        final (success, _) = await api
+            .getUsersApi()
+            .getMutualFriends(userId: widget.userId, n: 100)
+            .validateVrc();
+        mutualFriends = success?.data;
+      } catch (e) {
+        debugPrint('Failed to fetch mutual friends: $e');
       }
     }
 
@@ -148,6 +164,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       isFriend: isFriend,
       favoriteGroups: favoriteGroups,
       selectedGroupNames: selectedGroupNames,
+      mutualFriends: mutualFriends,
     );
   }
 
@@ -489,11 +506,23 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       builder: (context, snapshot) {
         final enriched = snapshot.data;
         final enrichedUser = enriched?.user;
+        final isDetailReady = snapshot.connectionState == ConnectionState.done;
+        final resolvedAvatarUrl = _pickFirstNonEmpty([
+          widget.avatarUrl,
+          enrichedUser?.currentAvatarImageUrl,
+          enrichedUser?.currentAvatarThumbnailImageUrl,
+        ]);
+        final resolvedHeaderImageUrl = _pickFirstNonEmpty([
+          widget.imageUrl,
+          enrichedUser?.profilePicOverride,
+          enrichedUser?.profilePicOverrideThumbnail,
+          enrichedUser?.currentAvatarImageUrl,
+        ]);
         return _FriendDetailPageContent(
           dio: widget.dio ?? FriendDetailPage._fallbackDio,
           displayName: widget.displayName,
-          avatarUrl: widget.avatarUrl,
-          imageUrl: widget.imageUrl,
+          avatarUrl: resolvedAvatarUrl,
+          imageUrl: resolvedHeaderImageUrl,
           locationText: snapshot.data?.locationText,
           bio: widget.bio,
           nameColor: widget.nameColor,
@@ -507,9 +536,11 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
                   ? DateTime.tryParse(enrichedUser!.lastActivity)
                   : null) ??
               widget.lastActivity,
+          mutualFriends: enriched?.mutualFriends,
+          rawApi: widget.rawApi,
           appBarActions: [
             PopupMenuButton<_DetailMoreAction>(
-              enabled: !_menuActionLoading,
+              enabled: !_menuActionLoading && isDetailReady && enriched != null,
               onSelected: (action) => _onMoreAction(action, enriched ?? const _DetailEnrichment()),
               itemBuilder: (_) => [
                 PopupMenuItem<_DetailMoreAction>(
@@ -535,6 +566,16 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       },
     );
   }
+
+  String? _pickFirstNonEmpty(List<String?> values) {
+    for (final value in values) {
+      final normalized = value?.trim();
+      if (normalized != null && normalized.isNotEmpty) {
+        return normalized;
+      }
+    }
+    return null;
+  }
 }
 
 class _DetailEnrichment {
@@ -544,6 +585,7 @@ class _DetailEnrichment {
     this.isFriend = false,
     this.favoriteGroups = const [],
     this.selectedGroupNames = const <String>{},
+    this.mutualFriends,
   });
 
   final User? user;
@@ -551,6 +593,7 @@ class _DetailEnrichment {
   final bool isFriend;
   final List<FavoriteGroup> favoriteGroups;
   final Set<String> selectedGroupNames;
+  final List<MutualFriend>? mutualFriends;
 }
 
 enum _DetailMoreAction { friendAction, adjustFavorite }
@@ -592,6 +635,8 @@ class _FriendDetailPageContent extends StatelessWidget {
     this.bioLinks = const [],
     this.dateJoined,
     this.lastActivity,
+    this.mutualFriends,
+    this.rawApi,
     this.appBarActions = const [],
   });
 
@@ -608,6 +653,8 @@ class _FriendDetailPageContent extends StatelessWidget {
   final List<String> bioLinks;
   final DateTime? dateJoined;
   final DateTime? lastActivity;
+  final List<MutualFriend>? mutualFriends;
+  final VrchatDartGenerated? rawApi;
   final List<Widget> appBarActions;
 
   @override
@@ -620,6 +667,11 @@ class _FriendDetailPageContent extends StatelessWidget {
     final showLocation =
         status != UserStatus.offline && normalizedLocationText.isNotEmpty;
     final visibleLinks = _sanitizeBioLinks(bioLinks).take(3).toList();
+    final filteredMutualFriends = _visibleMutualFriends;
+    final hiddenMutualCount = _hiddenMutualCount;
+    final mutualTitle = hiddenMutualCount > 0
+      ? '共同好友 (${filteredMutualFriends.length}) (${hiddenMutualCount}个隐藏)'
+      : '共同好友 (${filteredMutualFriends.length})';
 
     return Scaffold(
       body: CustomScrollView(
@@ -743,6 +795,27 @@ class _FriendDetailPageContent extends StatelessWidget {
               ),
             ),
           ),
+          if (filteredMutualFriends.isNotEmpty || hiddenMutualCount > 0)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                child: Card(
+                  margin: EdgeInsets.zero,
+                  clipBehavior: Clip.antiAlias,
+                  child: ExpansionTile(
+                    initiallyExpanded: false,
+                    title: Text(
+                      mutualTitle,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    childrenPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    children: [
+                      _buildMutualFriendsList(context),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -824,6 +897,91 @@ class _FriendDetailPageContent extends StatelessWidget {
     if (diff.inMinutes < 60) return '${diff.inMinutes}分钟前';
     if (diff.inHours < 24) return '${diff.inHours}小时前';
     return '${diff.inDays}天前';
+  }
+
+  Widget _buildMutualFriendsList(BuildContext context) {
+    final visibleMutualFriends = _visibleMutualFriends;
+    if (visibleMutualFriends.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final sortedFriends = [...visibleMutualFriends]
+      ..sort((a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+
+    return GridView.count(
+      crossAxisCount: 4,
+      mainAxisSpacing: 8,
+      crossAxisSpacing: 8,
+      childAspectRatio: 0.75,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      children: [
+        for (final friend in sortedFriends)
+          GestureDetector(
+            onTap: () => _openMutualFriendDetail(context, friend),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                VrcAvatar(
+                  dio: dio,
+                  imageUrl: friend.currentAvatarImageUrl,
+                  size: 44,
+                ),
+                const SizedBox(height: 6),
+                Expanded(
+                  child: Text(
+                    friend.displayName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<MutualFriend> get _visibleMutualFriends {
+    final list = mutualFriends;
+    if (list == null || list.isEmpty) return const [];
+    return list.where((friend) {
+      final name = friend.displayName.trim().toLowerCase();
+      return name != 'hidden mutual';
+    }).toList();
+  }
+
+  int get _hiddenMutualCount {
+    final list = mutualFriends;
+    if (list == null || list.isEmpty) return 0;
+    return list.where((friend) {
+      final name = friend.displayName.trim().toLowerCase();
+      return name == 'hidden mutual';
+    }).length;
+  }
+
+  Future<void> _openMutualFriendDetail(
+    BuildContext context,
+    MutualFriend friend,
+  ) async {
+    final api = rawApi;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            FriendDetailPage(
+              userId: friend.id,
+              displayName: friend.displayName,
+              avatarUrl: friend.currentAvatarImageUrl,
+              status: friend.status,
+              statusDescription: friend.statusDescription,
+              rawApi: api,
+              dio: dio,
+            ),
+      ),
+    );
   }
 }
 

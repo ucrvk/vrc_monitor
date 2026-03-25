@@ -496,7 +496,7 @@ class _FriendsPageState extends State<FriendsPage> {
         },
         children: [
           _buildFriendsBody(),
-          MePage(currentUser: widget.currentUser),
+          MePage(api: widget.api, currentUser: widget.currentUser),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -749,7 +749,7 @@ class _FriendsPageState extends State<FriendsPage> {
   void _startRefreshCooldown() {
     _refreshCooldownTimer?.cancel();
     setState(() {
-      _refreshCooldownSeconds = 60;
+      _refreshCooldownSeconds = 5;
     });
 
     _refreshCooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
