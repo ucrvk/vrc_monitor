@@ -523,6 +523,7 @@ class _FriendsPageState extends State<FriendsPage> {
           dio: widget.api.rawApi.dio,
           locationText: _locationTextFor(friends[i]),
           avatarUrl: _pickAvatarUrl(friends[i]),
+          avatarFileId: _userStore.getAvatarFileId(friends[i].id),
           trustColor: _trustColor(friends[i].tags),
           onTap: () => _openFriendDetailPage(friends[i].id),
         ),
@@ -692,6 +693,7 @@ class _UserRow extends StatelessWidget {
     required this.dio,
     required this.locationText,
     required this.avatarUrl,
+    required this.avatarFileId,
     required this.trustColor,
     required this.onTap,
   });
@@ -700,6 +702,7 @@ class _UserRow extends StatelessWidget {
   final Dio dio;
   final String locationText;
   final String? avatarUrl;
+  final String? avatarFileId;
   final Color trustColor;
   final VoidCallback onTap;
 
@@ -712,6 +715,7 @@ class _UserRow extends StatelessWidget {
       leading: _AvatarWithStatusDot(
         dio: dio,
         imageUrl: avatarUrl,
+        fileId: avatarFileId,
         statusColor: statusMeta.color,
       ),
       title: Text(
@@ -758,13 +762,14 @@ class _LimitedUserRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final avatarUrl = _pickAvatarUrl(friend);
+    final avatarInfo = UserStore.instance.getAvatarInfo(friend.id);
 
     return ListTile(
       onTap: onTap,
       leading: _AvatarWithStatusDot(
         dio: dio,
-        imageUrl: avatarUrl,
+        imageUrl: avatarInfo?.avatarSmallUrl,
+        fileId: UserStore.instance.getAvatarFileId(friend.id),
         statusColor: Colors.grey,
       ),
       title: Text(
@@ -779,43 +784,19 @@ class _LimitedUserRow extends StatelessWidget {
       ),
     );
   }
-
-  String? _pickAvatarUrl(LimitedUserFriend friend) {
-    final userIcon = friend.userIcon;
-    if (userIcon != null && userIcon.trim().isNotEmpty) {
-      return userIcon;
-    }
-
-    final profilePic = friend.profilePicOverride?.trim() ?? '';
-    final avatarImg = friend.currentAvatarImageUrl?.trim() ?? '';
-
-    if (profilePic.isNotEmpty) {
-      return cache.ImageCache.toSmallUrl(profilePic, isCustom: true);
-    }
-
-    if (avatarImg.isNotEmpty) {
-      var fullUrl = avatarImg;
-      if (fullUrl.contains('/image/') &&
-          !fullUrl.endsWith('/file') &&
-          !fullUrl.endsWith('/256')) {
-        fullUrl = '$fullUrl/file';
-      }
-      return cache.ImageCache.toSmallUrl(fullUrl, isCustom: false);
-    }
-
-    return null;
-  }
 }
 
 class _AvatarWithStatusDot extends StatelessWidget {
   const _AvatarWithStatusDot({
     required this.dio,
     required this.imageUrl,
+    this.fileId,
     required this.statusColor,
   });
 
   final Dio dio;
   final String? imageUrl;
+  final String? fileId;
   final Color statusColor;
 
   @override
@@ -826,7 +807,7 @@ class _AvatarWithStatusDot extends StatelessWidget {
       height: 40,
       child: Stack(
         children: [
-          VrcAvatar(imageUrl: imageUrl, dio: dio),
+          VrcAvatar(imageUrl: imageUrl, fileId: fileId, dio: dio),
           Positioned(
             right: 0,
             bottom: 0,

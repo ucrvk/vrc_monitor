@@ -72,6 +72,52 @@ class UserAvatarInfo {
     );
   }
 
+  static UserAvatarInfo fromLimitedUser(LimitedUserFriend? user) {
+    if (user == null) return const UserAvatarInfo();
+
+    final userIcon = user.userIcon?.trim() ?? '';
+    final hasUserIcon = userIcon.isNotEmpty;
+
+    final profilePic = user.profilePicOverride?.trim() ?? '';
+    final avatarImg = user.currentAvatarImageUrl?.trim() ?? '';
+
+    String? avatarSmallUrl;
+    String? avatarFullUrl;
+    String? headerSmallUrl;
+    String? headerFullUrl;
+
+    if (hasUserIcon) {
+      avatarFullUrl = userIcon;
+      avatarSmallUrl = userIcon;
+
+      if (profilePic.isNotEmpty) {
+        headerFullUrl = profilePic;
+        headerSmallUrl = _toSmallUrl(profilePic, isCustom: true);
+      } else if (avatarImg.isNotEmpty) {
+        headerFullUrl = _ensureFileEnding(avatarImg);
+        headerSmallUrl = _toSmallUrl(headerFullUrl, isCustom: false);
+      }
+    } else if (profilePic.isNotEmpty) {
+      avatarFullUrl = profilePic;
+      avatarSmallUrl = _toSmallUrl(profilePic, isCustom: true);
+      headerFullUrl = avatarFullUrl;
+      headerSmallUrl = avatarSmallUrl;
+    } else if (avatarImg.isNotEmpty) {
+      avatarFullUrl = _ensureFileEnding(avatarImg);
+      avatarSmallUrl = _toSmallUrl(avatarFullUrl, isCustom: false);
+      headerFullUrl = avatarFullUrl;
+      headerSmallUrl = avatarSmallUrl;
+    }
+
+    return UserAvatarInfo(
+      avatarSmallUrl: avatarSmallUrl,
+      avatarFullUrl: avatarFullUrl,
+      headerSmallUrl: headerSmallUrl,
+      headerFullUrl: headerFullUrl,
+      hasCustomIcon: hasUserIcon,
+    );
+  }
+
   static String _toSmallUrl(String url, {required bool isCustom}) {
     return cache.ImageCache.toSmallUrl(url, isCustom: isCustom);
   }
@@ -103,8 +149,7 @@ class UserStore extends ChangeNotifier {
   final Set<String> _allFriendIds = <String>{};
   final Set<String> _onlineFriendIds = <String>{};
   final Map<String, User> _users = <String, User>{};
-  final Map<String, UserAvatarInfo> _avatarInfoByUserId =
-      <String, UserAvatarInfo>{};
+  final Map<String, String> _avatarFileIdByUserId = <String, String>{};
   final Map<String, LimitedUserFriend> _limitedUsers =
       <String, LimitedUserFriend>{};
   final Map<String, List<MutualFriend>> _mutualFriends =
@@ -216,6 +261,10 @@ class UserStore extends ChangeNotifier {
     for (final friend in offline) {
       _allFriendIds.add(friend.id);
       _limitedUsers[friend.id] = friend;
+      final fileId = _extractAvatarFileIdFromLimitedUser(friend);
+      if (fileId != null) {
+        _avatarFileIdByUserId[friend.id] = fileId;
+      }
     }
   }
 
@@ -381,7 +430,7 @@ class UserStore extends ChangeNotifier {
         _onlineFriendIds.remove(e.userId);
         _limitedUsers.remove(e.userId);
         _users.remove(e.userId);
-        _avatarInfoByUserId.remove(e.userId);
+        _avatarFileIdByUserId.remove(e.userId);
         _mutualFriends.remove(e.userId);
         _friendStatuses.remove(e.userId);
         break;
@@ -435,11 +484,66 @@ class UserStore extends ChangeNotifier {
 
   User? getUser(String userId) => _users[userId];
 
-  UserAvatarInfo? getAvatarInfo(String userId) => _avatarInfoByUserId[userId];
+  String? getAvatarFileId(String userId) => _avatarFileIdByUserId[userId];
+
+  UserAvatarInfo? getAvatarInfo(String userId) {
+    final user = _users[userId];
+    if (user != null) {
+      return UserAvatarInfo.fromUser(user);
+    }
+
+    final limited = _limitedUsers[userId];
+    if (limited != null) {
+      return UserAvatarInfo.fromLimitedUser(limited);
+    }
+
+    return null;
+  }
 
   void _setUser(User user) {
     _users[user.id] = user;
-    _avatarInfoByUserId[user.id] = UserAvatarInfo.fromUser(user);
+    final fileId = _extractAvatarFileId(user);
+    if (fileId != null) {
+      _avatarFileIdByUserId[user.id] = fileId;
+    }
+  }
+
+  static String? _extractAvatarFileId(User user) {
+    final userIcon = user.userIcon.trim();
+    if (userIcon.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(userIcon);
+    }
+
+    final profilePic = user.profilePicOverride.trim();
+    if (profilePic.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(profilePic);
+    }
+
+    final avatarImg = user.currentAvatarImageUrl.trim();
+    if (avatarImg.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(avatarImg);
+    }
+
+    return null;
+  }
+
+  static String? _extractAvatarFileIdFromLimitedUser(LimitedUserFriend user) {
+    final userIcon = user.userIcon?.trim() ?? '';
+    if (userIcon.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(userIcon);
+    }
+
+    final profilePic = user.profilePicOverride?.trim() ?? '';
+    if (profilePic.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(profilePic);
+    }
+
+    final avatarImg = user.currentAvatarImageUrl?.trim() ?? '';
+    if (avatarImg.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(avatarImg);
+    }
+
+    return null;
   }
 
   LimitedUserFriend? getLimitedUser(String userId) => _limitedUsers[userId];
@@ -512,7 +616,7 @@ class UserStore extends ChangeNotifier {
     _allFriendIds.clear();
     _onlineFriendIds.clear();
     _users.clear();
-    _avatarInfoByUserId.clear();
+    _avatarFileIdByUserId.clear();
     _limitedUsers.clear();
     _mutualFriends.clear();
     _friendStatuses.clear();

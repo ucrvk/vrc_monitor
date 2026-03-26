@@ -78,6 +78,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       final dio = FriendDetailPage._fallbackDio;
 
       final avatarInfo = UserStore.instance.getAvatarInfo(widget.userId);
+      final avatarFileId = UserStore.instance.getAvatarFileId(widget.userId);
       final cacheTasks = <Future<void>>[];
 
       if (avatarInfo != null) {
@@ -85,7 +86,9 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         final headerSmall = avatarInfo.headerSmallUrl;
 
         if (avatarSmall != null && avatarSmall.isNotEmpty) {
-          final fileId = cache.ImageCache.extractFileIdFromUrl(avatarSmall);
+          final fileId =
+              avatarFileId ??
+              cache.ImageCache.extractFileIdFromUrl(avatarSmall);
           if (fileId != null) {
             cacheTasks.add(
               imageCache.cacheByFileId(
@@ -512,6 +515,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         final resolvedHeaderImageUrl = avatarInfo?.headerSmallUrl;
         final avatarFullUrl = avatarInfo?.avatarFullUrl;
         final headerFullUrl = avatarInfo?.headerFullUrl;
+        final avatarFileId = UserStore.instance.getAvatarFileId(widget.userId);
 
         final resolvedDisplayName = enrichedUser?.displayName ?? widget.userId;
         final nameColor = _trustColor(enrichedUser?.tags ?? const []);
@@ -521,6 +525,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
           dio: FriendDetailPage._fallbackDio,
           displayName: resolvedDisplayName,
           avatarUrl: resolvedAvatarUrl,
+          avatarFileId: avatarFileId,
           imageUrl: resolvedHeaderImageUrl,
           avatarFullUrl: avatarFullUrl,
           headerFullUrl: headerFullUrl,
@@ -637,6 +642,7 @@ class _FriendDetailPageContent extends StatelessWidget {
     required this.dio,
     required this.displayName,
     this.avatarUrl,
+    this.avatarFileId,
     this.imageUrl,
     this.avatarFullUrl,
     this.headerFullUrl,
@@ -658,6 +664,7 @@ class _FriendDetailPageContent extends StatelessWidget {
   final Dio dio;
   final String displayName;
   final String? avatarUrl;
+  final String? avatarFileId;
   final String? imageUrl;
   final String? avatarFullUrl;
   final String? headerFullUrl;
@@ -704,6 +711,7 @@ class _FriendDetailPageContent extends StatelessWidget {
               dio: dio,
               displayName: displayName,
               avatarUrl: avatarUrl,
+              avatarFileId: avatarFileId,
               imageUrl: imageUrl,
               nameColor: nameColor,
               expandedHeight: expandedHeaderHeight,
@@ -1014,6 +1022,7 @@ class _CollapsingHeader extends StatelessWidget {
     required this.dio,
     required this.displayName,
     required this.avatarUrl,
+    this.avatarFileId,
     required this.imageUrl,
     required this.nameColor,
     required this.expandedHeight,
@@ -1028,6 +1037,7 @@ class _CollapsingHeader extends StatelessWidget {
   final Dio dio;
   final String displayName;
   final String? avatarUrl;
+  final String? avatarFileId;
   final String? imageUrl;
   final Color? nameColor;
   final double expandedHeight;
@@ -1128,6 +1138,7 @@ class _CollapsingHeader extends StatelessWidget {
                       userId: userId,
                       dio: dio,
                       imageUrl: avatarUrl,
+                      fileId: avatarFileId,
                       size: avatarSize,
                     ),
                   ),
@@ -1226,33 +1237,39 @@ class _TrustLevelAvatar extends StatelessWidget {
     required this.userId,
     required this.dio,
     required this.imageUrl,
+    this.fileId,
     required this.size,
   });
 
   final String userId;
   final Dio dio;
   final String? imageUrl;
+  final String? fileId;
   final double size;
 
   @override
   Widget build(BuildContext context) {
     final normalizedUrl = imageUrl?.trim();
-    final fileId = cache.ImageCache.extractFileIdFromUrl(normalizedUrl);
+    final resolvedFileId = fileId?.trim().isNotEmpty == true
+        ? fileId!.trim()
+        : cache.ImageCache.extractFileIdFromUrl(normalizedUrl);
 
-    if (fileId == null || fileId.isEmpty) {
+    if (resolvedFileId == null || resolvedFileId.isEmpty) {
       return VrcAvatar(dio: dio, imageUrl: normalizedUrl, size: size);
     }
 
     Future.microtask(
       () => cache.CacheManager.instance.imageCache.cacheByFileId(
         dio: dio,
-        fileId: fileId,
+        fileId: resolvedFileId,
         imageUrl: normalizedUrl,
       ),
     );
 
     return FutureBuilder<Uint8List?>(
-      future: cache.CacheManager.instance.imageCache.getByFileId(fileId),
+      future: cache.CacheManager.instance.imageCache.getByFileId(
+        resolvedFileId,
+      ),
       builder: (context, snapshot) {
         final bytes = snapshot.data;
         if (bytes != null && bytes.isNotEmpty) {
