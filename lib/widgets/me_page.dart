@@ -5,7 +5,12 @@ import 'package:vrc_monitor/widgets/settings_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
 
 class MePage extends StatefulWidget {
-  const MePage({super.key, required this.api, required this.currentUser, this.onLogout});
+  const MePage({
+    super.key,
+    required this.api,
+    required this.currentUser,
+    this.onLogout,
+  });
 
   final VrchatDart api;
   final CurrentUser currentUser;
@@ -45,86 +50,89 @@ class _MePageState extends State<MePage> {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                VrcAvatar(
-                  dio: widget.api.rawApi.dio,
-                  imageUrl: _currentUserAvatarUrl(_currentUser),
-                  size: 52,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _currentUser.displayName,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          color: _trustColorForCurrentUser(_currentUser),
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (_loadingUser)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 6),
-                          child: SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
-                    ],
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  VrcAvatar(
+                    dio: widget.api.rawApi.dio,
+                    imageUrl: _currentUserAvatarUrl(_currentUser),
+                    size: 52,
                   ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _currentUser.displayName,
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
+                                color: _trustColorForCurrentUser(_currentUser),
+                              ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (_loadingUser)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 6),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.badge_outlined),
+                  title: const Text('个人简介'),
+                  subtitle: Text(
+                    _safeText(_currentUser.bio, fallback: '暂无个人简介'),
+                  ),
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap: _saving ? null : _editBio,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.circle_notifications_outlined),
+                  title: const Text('状态'),
+                  subtitle: Text(_statusSummary(_currentUser)),
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap: _saving ? null : _editStatus,
                 ),
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.badge_outlined),
-                title: const Text('个人简介'),
-                subtitle: Text(_safeText(_currentUser.bio, fallback: '暂无个人简介')),
-                trailing: const Icon(Icons.edit_outlined),
-                onTap: _saving ? null : _editBio,
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.circle_notifications_outlined),
-                title: const Text('状态'),
-                subtitle: Text(_statusSummary(_currentUser)),
-                trailing: const Icon(Icons.edit_outlined),
-                onTap: _saving ? null : _editStatus,
-              ),
-            ],
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.groups_2_outlined),
+              title: const Text('当前总在线人数'),
+              subtitle: Text(_onlineUsers == null ? '读取中...' : '$_onlineUsers'),
+              trailing: const Icon(Icons.refresh),
+              onTap: _refreshOnlineUsers,
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: ListTile(
-            leading: const Icon(Icons.groups_2_outlined),
-            title: const Text('当前总在线人数'),
-            subtitle: Text(_onlineUsers == null ? '读取中...' : '$_onlineUsers'),
-            trailing: const Icon(Icons.refresh),
-            onTap: _refreshOnlineUsers,
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.settings),
+              title: const Text('设置'),
+              onTap: _openSettingsPage,
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: ListTile(
-            leading: const Icon(Icons.settings),
-            title: const Text('设置'),
-            onTap: _openSettingsPage,
-          ),
-        ),
-      ],
+        ],
       ),
     );
   }
@@ -135,7 +143,10 @@ class _MePageState extends State<MePage> {
       _loadingUser = true;
     });
     try {
-      final (success, _) = await widget.api.rawApi.getAuthenticationApi().getCurrentUser().validateVrc();
+      final (success, _) = await widget.api.rawApi
+          .getAuthenticationApi()
+          .getCurrentUser()
+          .validateVrc();
       if (!mounted) return;
       if (success != null) {
         setState(() {
@@ -195,7 +206,9 @@ class _MePageState extends State<MePage> {
 
   Future<void> _editStatus() async {
     UserStatus selectedStatus = _currentUser.status;
-    final descController = TextEditingController(text: _currentUser.statusDescription);
+    final descController = TextEditingController(
+      text: _currentUser.statusDescription,
+    );
     final historyOptions = _currentUser.statusHistory
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
@@ -218,10 +231,16 @@ class _MePageState extends State<MePage> {
                 ),
                 items: const [
                   DropdownMenuItem(value: UserStatus.active, child: Text('在线')),
-                  DropdownMenuItem(value: UserStatus.joinMe, child: Text('欢迎加入')),
+                  DropdownMenuItem(
+                    value: UserStatus.joinMe,
+                    child: Text('欢迎加入'),
+                  ),
                   DropdownMenuItem(value: UserStatus.askMe, child: Text('忙碌')),
                   DropdownMenuItem(value: UserStatus.busy, child: Text('请勿打扰')),
-                  DropdownMenuItem(value: UserStatus.offline, child: Text('离线')),
+                  DropdownMenuItem(
+                    value: UserStatus.offline,
+                    child: Text('离线'),
+                  ),
                 ],
                 onChanged: (value) {
                   if (value != null) {
@@ -311,15 +330,17 @@ class _MePageState extends State<MePage> {
           .validateVrc();
       if (!mounted) return;
       if (success == null) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('更新失败：${failure?.error ?? '未知错误'}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('更新失败：${failure?.error ?? '未知错误'}')),
+        );
         return;
       }
       setState(() {
         _currentUser = success.data;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('更新成功')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('更新成功')));
     } finally {
       if (mounted) {
         setState(() {
@@ -330,9 +351,9 @@ class _MePageState extends State<MePage> {
   }
 
   Future<void> _openSettingsPage() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const SettingsPage()));
   }
 
   Future<void> _logout() async {

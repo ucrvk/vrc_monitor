@@ -103,10 +103,18 @@ class FriendSearchUser {
 
   Color get trustColor {
     final trustTags = tags.map((e) => e.toLowerCase()).toSet();
-    if (trustTags.contains('system_trust_veteran')) return const Color(0xFF8E44AD);
-    if (trustTags.contains('system_trust_trusted')) return const Color(0xFFFF9800);
-    if (trustTags.contains('system_trust_known')) return const Color(0xFF4CAF50);
-    if (trustTags.contains('system_trust_basic')) return const Color(0xFF64B5F6);
+    if (trustTags.contains('system_trust_veteran')) {
+      return const Color(0xFF8E44AD);
+    }
+    if (trustTags.contains('system_trust_trusted')) {
+      return const Color(0xFFFF9800);
+    }
+    if (trustTags.contains('system_trust_known')) {
+      return const Color(0xFF4CAF50);
+    }
+    if (trustTags.contains('system_trust_basic')) {
+      return const Color(0xFF64B5F6);
+    }
     return Colors.grey;
   }
 }
@@ -152,7 +160,8 @@ class _FriendSearchPageState extends State<FriendSearchPage> {
     }).toList();
     final showFriendMatches = keyword.isNotEmpty && !_searchingAll;
     final showAllMatches = keyword.isNotEmpty && _searchingAll;
-    final hasAnyResult = (showFriendMatches && friendMatches.isNotEmpty) ||
+    final hasAnyResult =
+        (showFriendMatches && friendMatches.isNotEmpty) ||
         (showAllMatches && _allSearchMatches.isNotEmpty);
 
     return Scaffold(
@@ -260,7 +269,9 @@ class _FriendSearchPageState extends State<FriendSearchPage> {
         return;
       }
 
-      final friendById = {for (final friend in widget.friends) friend.id: friend};
+      final friendById = {
+        for (final friend in widget.friends) friend.id: friend,
+      };
       final ordered = <FriendSearchUser>[];
       final seenIds = <String>{};
 
@@ -280,7 +291,9 @@ class _FriendSearchPageState extends State<FriendSearchPage> {
 
       ordered.sort((a, b) {
         if (a.isFriend != b.isFriend) return a.isFriend ? -1 : 1;
-        return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
+        return a.displayName.toLowerCase().compareTo(
+          b.displayName.toLowerCase(),
+        );
       });
 
       setState(() {
@@ -316,6 +329,7 @@ class _SearchFriendRow extends StatelessWidget {
       onTap: onTap,
       leading: _SearchAvatarWithStatusDot(
         dio: dio,
+        userId: friend.id,
         imageUrl: friend.smallAvatarUrl,
         statusColor: statusMeta.color,
       ),
@@ -351,11 +365,13 @@ class _SearchFriendRow extends StatelessWidget {
 class _SearchAvatarWithStatusDot extends StatelessWidget {
   const _SearchAvatarWithStatusDot({
     required this.dio,
+    this.userId,
     required this.imageUrl,
     required this.statusColor,
   });
 
   final Dio dio;
+  final String? userId;
   final String? imageUrl;
   final Color statusColor;
 

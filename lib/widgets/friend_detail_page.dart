@@ -10,48 +10,17 @@ import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrchat_dart_generated/src/model/mutual_friend.dart';
 import 'package:vrc_monitor/network/vrc_network_image.dart';
 import 'package:vrc_monitor/network/web_client.dart';
-import 'package:vrc_monitor/services/cache_manager.dart';
+import 'package:vrc_monitor/services/cache_manager.dart' as cache;
+import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
 
 class FriendDetailPage extends StatefulWidget {
-  const FriendDetailPage({
-    super.key,
-    this.dio,
-    required this.userId,
-    this.displayName = '',
-    this.avatarUrl,
-    this.imageUrl,
-    this.location,
-    this.isFriend,
-    this.bio,
-    this.nameColor,
-    this.status = UserStatus.offline,
-    this.statusDescription,
-    this.pronouns,
-    this.bioLinks = const [],
-    this.dateJoined,
-    this.lastActivity,
-    this.rawApi,
-  });
+  const FriendDetailPage({super.key, required this.userId, this.api});
 
   static final Dio _fallbackDio = WebClient.publicDio;
 
-  final Dio? dio;
   final String userId;
-  final String displayName;
-  final String? avatarUrl;
-  final String? imageUrl;
-  final String? location;
-  final bool? isFriend;
-  final String? bio;
-  final Color? nameColor;
-  final UserStatus status;
-  final String? statusDescription;
-  final String? pronouns;
-  final List<String> bioLinks;
-  final DateTime? dateJoined;
-  final DateTime? lastActivity;
-  final VrchatDartGenerated? rawApi;
+  final VrchatDartGenerated? api;
 
   @override
   State<FriendDetailPage> createState() => _FriendDetailPageState();
@@ -69,184 +38,85 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
 
   Future<_DetailEnrichment> _fetchDetailEnrichment() async {
     try {
-      await CacheManager.instance.dataCache.initialize();
-      final dataCache = CacheManager.instance.dataCache;
-      final api = widget.rawApi;
-      User? user;
+      final userStore = UserStore.instance;
+      final imageCache = cache.CacheManager.instance.imageCache;
+      final api = widget.api;
+
+      User? user = userStore.getUser(widget.userId);
       FriendStatus? friendStatus;
       List<MutualFriend>? mutualFriends;
-      final cachedDisplayName = dataCache.displayName(widget.userId);
-      final needsUserFetch =
+
+      if (user == null && api != null) {
+        user = await userStore.loadUser(widget.userId, api);
+      }
+
+      friendStatus = userStore.getFriendStatus(widget.userId);
+      if (friendStatus == null && api != null) {
+        friendStatus = await userStore.loadFriendStatus(widget.userId, api);
+      }
+
+      mutualFriends = userStore.getMutualFriends(widget.userId);
+      if (mutualFriends == null &&
           api != null &&
-          (widget.pronouns == null ||
-              widget.dateJoined == null ||
-              widget.location == null ||
-              (widget.imageUrl?.trim().isEmpty ?? true));
-
-      if (needsUserFetch) {
-        try {
-          final (success, _) = await api
-              .getUsersApi()
-              .getUser(userId: widget.userId)
-              .validateVrc();
-          user = success?.data;
-          final fetchedName = user?.displayName.trim() ?? '';
-          if (fetchedName.isNotEmpty) {
-            await dataCache.putUserDisplayName(widget.userId, fetchedName);
-          }
-        } catch (e) {
-          debugPrint('Failed to fetch user details: $e');
-        }
+          (friendStatus?.isFriend ?? false)) {
+        mutualFriends = await userStore.loadMutualFriends(widget.userId, api);
       }
 
-      if (api != null) {
-        try {
-          final (success, _) = await api
-              .getFriendsApi()
-              .getFriendStatus(userId: widget.userId)
-              .validateVrc();
-          friendStatus = success?.data;
-        } catch (e) {
-          debugPrint('Failed to fetch friend status: $e');
-        }
-      }
-
-      // Fetch mutual friends
-      if (api != null) {
-        try {
-          final (success, _) = await api
-              .getUsersApi()
-              .getMutualFriends(userId: widget.userId, n: 100)
-              .validateVrc();
-          mutualFriends = await _resolveMutualFriendsFromCache(
-            rawMutualFriends: success?.data,
-            dataCache: dataCache,
-          );
-        } catch (e) {
-          debugPrint('Failed to fetch mutual friends: $e');
-        }
-      }
-
-      final isFriend = friendStatus?.isFriend ?? widget.isFriend ?? false;
+      final isFriend = friendStatus?.isFriend ?? false;
 
       final locationText = await _resolveLocationText(
-        status: widget.status,
-        rawLocation: user?.location ?? widget.location,
+        status: user?.status ?? UserStatus.offline,
+        rawLocation: user?.location,
         api: api,
-        dataCache: dataCache,
       );
 
-      final favoriteGroups = <FavoriteGroup>[];
-      final selectedGroupNames = <String>{};
-      final cachedFavoriteGroups = dataCache.favoriteGroups;
-      if (cachedFavoriteGroups.isNotEmpty) {
-        favoriteGroups.addAll(
-          cachedFavoriteGroups
-              .map(
-                (g) => FavoriteGroup(
-                  id: g.name,
-                  name: g.name,
-                  displayName: g.displayName,
-                  ownerDisplayName: '',
-                  ownerId: '',
-                  tags: const [],
-                  type: FavoriteType.friend,
-                  visibility: FavoriteGroupVisibility.private,
-                ),
-              )
-              .toList(),
-        );
-        selectedGroupNames.addAll(dataCache.favoriteGroupsForUser(widget.userId));
-      }
+      final favoriteGroups = userStore.getFavoriteGroups();
+      final selectedGroupName = userStore.getFavoriteGroupForUser(
+        widget.userId,
+      );
 
-      if (api != null && isFriend) {
-        if (favoriteGroups.isEmpty || selectedGroupNames.isEmpty) {
-          try {
-            final (groupsSuccess, _) = await api
-                .getFavoritesApi()
-                .getFavoriteGroups(n: 100)
-                .validateVrc();
-            final groups = groupsSuccess?.data ?? const <FavoriteGroup>[];
-            favoriteGroups
-              ..clear()
-              ..addAll(groups.where((g) => g.type == FavoriteType.friend));
-
-            await dataCache.setFavoriteGroups(
-              favoriteGroups
-                  .map(
-                    (g) => CachedFavoriteGroup(
-                      name: g.name,
-                      displayName: g.displayName,
-                    ),
-                  )
-                  .toList(),
-            );
-          } catch (e) {
-            debugPrint('Failed to fetch favorite groups: $e');
-          }
-
-          try {
-            final userFavoriteGroups = <String, Set<String>>{
-              ...dataCache.userFavoriteGroups,
-            };
-            var offset = 0;
-            const pageSize = 100;
-            while (true) {
-              final (favoritesSuccess, _) = await api
-                  .getFavoritesApi()
-                  .getFavorites(type: 'friend', n: pageSize, offset: offset)
-                  .validateVrc();
-              final page = favoritesSuccess?.data ?? const <Favorite>[];
-              for (final item in page) {
-                userFavoriteGroups[item.favoriteId] = item.tags.toSet();
-                if (item.favoriteId == widget.userId) {
-                  selectedGroupNames
-                    ..clear()
-                    ..addAll(item.tags);
-                }
-              }
-              if (page.length < pageSize) break;
-              offset += page.length;
-            }
-            await dataCache.setUserFavoriteGroups(userFavoriteGroups);
-          } catch (e) {
-            debugPrint('Failed to fetch favorite tags: $e');
-          }
-        }
-      }
-
-      final cacheDio = widget.dio ?? FriendDetailPage._fallbackDio;
+      final dio = FriendDetailPage._fallbackDio;
       final avatarForCache = _pickFirstNonEmpty([
-        widget.avatarUrl,
         user?.currentAvatarImageUrl,
         user?.currentAvatarThumbnailImageUrl,
       ]);
       final profileForCache = _pickFirstNonEmpty([
-        widget.imageUrl,
         user?.profilePicOverride,
         user?.profilePicOverrideThumbnail,
         user?.currentAvatarImageUrl,
       ]);
+      final avatarFileId = cache.ImageCache.extractFileIdFromUrl(
+        avatarForCache,
+      );
+      final profileFileId = cache.ImageCache.extractFileIdFromUrl(
+        profileForCache,
+      );
       Future.wait([
-        CacheManager.instance.imageCache.cacheAvatar(
-          dio: cacheDio,
-          userId: widget.userId,
-          imageUrl: avatarForCache,
-        ),
-        CacheManager.instance.imageCache.cacheProfile(
-          dio: cacheDio,
-          userId: widget.userId,
-          imageUrl: profileForCache,
-        ),
+        if (avatarFileId != null)
+          imageCache.cacheByFileId(
+            dio: dio,
+            fileId: avatarFileId,
+            imageUrl: avatarForCache,
+          ),
+        if (profileFileId != null)
+          imageCache.cacheByFileId(
+            dio: dio,
+            fileId: profileFileId,
+            imageUrl: profileForCache,
+          ),
       ]);
 
       return _DetailEnrichment(
         user: user,
-        displayName: user?.displayName ?? cachedDisplayName,
         locationText: locationText,
         isFriend: isFriend,
-        favoriteGroups: favoriteGroups,
-        selectedGroupNames: selectedGroupNames,
+        favoriteGroups: favoriteGroups
+            .map(
+              (g) =>
+                  _FavoriteGroupView(name: g.name, displayName: g.displayName),
+            )
+            .toList(),
+        selectedGroupName: selectedGroupName,
         mutualFriends: mutualFriends,
       );
     } catch (e) {
@@ -255,69 +125,10 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     }
   }
 
-  Future<List<MutualFriend>?> _resolveMutualFriendsFromCache({
-    required List<MutualFriend>? rawMutualFriends,
-    required DataCache dataCache,
-  }) async {
-    final source = rawMutualFriends;
-    if (source == null || source.isEmpty) return source;
-
-    final nextDisplayNameById = <String, String>{
-      ...dataCache.userDisplayNameById,
-    };
-    var cacheChanged = false;
-    final resolved = <MutualFriend>[];
-
-    for (final friend in source) {
-      final apiName = friend.displayName.trim();
-      final isHiddenMutual = apiName.toLowerCase() == 'hidden mutual';
-      final cachedName = (dataCache.displayName(friend.id) ?? '').trim();
-
-      final displayName = isHiddenMutual
-          ? friend.displayName
-          : (cachedName.isNotEmpty ? cachedName : friend.displayName);
-
-      if (!isHiddenMutual) {
-        final nameToCache = cachedName.isNotEmpty ? cachedName : apiName;
-        if (nameToCache.isNotEmpty && nextDisplayNameById[friend.id] != nameToCache) {
-          nextDisplayNameById[friend.id] = nameToCache;
-          cacheChanged = true;
-        }
-      }
-
-      if (displayName == friend.displayName) {
-        resolved.add(friend);
-        continue;
-      }
-
-      resolved.add(
-        MutualFriend(
-          avatarThumbnail: friend.avatarThumbnail,
-          currentAvatarImageUrl: friend.currentAvatarImageUrl,
-          currentAvatarTags: friend.currentAvatarTags,
-          currentAvatarThumbnailImageUrl: friend.currentAvatarThumbnailImageUrl,
-          displayName: displayName,
-          id: friend.id,
-          imageUrl: friend.imageUrl,
-          profilePicOverride: friend.profilePicOverride,
-          status: friend.status,
-          statusDescription: friend.statusDescription,
-        ),
-      );
-    }
-
-    if (cacheChanged) {
-      await dataCache.setUserDisplayNameById(nextDisplayNameById);
-    }
-
-    return resolved;
-  }
-
   Future<String?> _resolveLocationText({
     required UserStatus status,
     required String? rawLocation,
     required VrchatDartGenerated? api,
-    required DataCache dataCache,
   }) async {
     if (status == UserStatus.offline) return null;
 
@@ -332,7 +143,8 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     if (parsed == null || api == null) return location;
 
     String base = location;
-    final cachedWorldName = dataCache.worldName(parsed.worldId);
+    final cachedWorldName = cache.CacheManager.instance.worldNameCache
+        .worldName(parsed.worldId);
     if (cachedWorldName != null && cachedWorldName.trim().isNotEmpty) {
       base = cachedWorldName.trim();
     } else {
@@ -344,14 +156,21 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         final worldName = worldSuccess?.data.name.trim() ?? '';
         if (worldName.isNotEmpty) {
           base = worldName;
-          await dataCache.putWorldName(parsed.worldId, worldName);
+          await cache.CacheManager.instance.worldNameCache.putWorldName(
+            parsed.worldId,
+            worldName,
+          );
         }
       } catch (e) {
         debugPrint('Failed to resolve world name: $e');
       }
     }
 
-    final cachedType = dataCache.instanceType(location);
+    final cachedType = cache
+        .CacheManager
+        .instance
+        .memoryCache
+        .instanceTypeByLocation[location];
     if (cachedType != null && cachedType.trim().isNotEmpty) {
       return '$base - ${cachedType.trim()}';
     }
@@ -359,7 +178,10 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     try {
       final (instanceSuccess, _) = await api
           .getWorldsApi()
-          .getWorldInstance(worldId: parsed.worldId, instanceId: parsed.instanceId)
+          .getWorldInstance(
+            worldId: parsed.worldId,
+            instanceId: parsed.instanceId,
+          )
           .validateVrc();
       final instance = instanceSuccess?.data;
       if (instance == null) return base;
@@ -369,7 +191,10 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         canRequestInvite: instance.canRequestInvite ?? false,
       );
       if (typeLabel.isEmpty) return base;
-      await dataCache.putInstanceType(location, typeLabel);
+      cache.CacheManager.instance.memoryCache.putInstanceType(
+        location,
+        typeLabel,
+      );
       return '$base - $typeLabel';
     } catch (e) {
       debugPrint('Failed to resolve world instance type: $e');
@@ -387,10 +212,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
 
     final instanceId = value.substring(firstColon + 1);
     if (instanceId.isEmpty) return null;
-    return _ParsedLocation(
-      worldId: worldId,
-      instanceId: instanceId,
-    );
+    return _ParsedLocation(worldId: worldId, instanceId: instanceId);
   }
 
   String _instanceTypeLabel(
@@ -411,7 +233,10 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     }
   }
 
-  Future<void> _onMoreAction(_DetailMoreAction action, _DetailEnrichment enriched) async {
+  Future<void> _onMoreAction(
+    _DetailMoreAction action,
+    _DetailEnrichment enriched,
+  ) async {
     if (_menuActionLoading) return;
     switch (action) {
       case _DetailMoreAction.friendAction:
@@ -428,14 +253,13 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
   }
 
   Future<void> _deleteFriend() async {
-    final api = widget.rawApi;
+    final api = widget.api;
     if (api == null) {
       _showSnack('当前不可用：缺少 API 上下文');
       return;
     }
-    final targetName = widget.displayName.trim().isEmpty
-        ? widget.userId
-        : widget.displayName.trim();
+    final enriched = await _enrichmentFuture;
+    final targetName = enriched.user?.displayName ?? widget.userId;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -487,7 +311,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
   }
 
   Future<void> _sendFriendRequest() async {
-    final api = widget.rawApi;
+    final api = widget.api;
     if (api == null) {
       _showSnack('当前不可用：缺少 API 上下文');
       return;
@@ -520,7 +344,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
   }
 
   Future<void> _adjustFavoriteGroup(_DetailEnrichment enriched) async {
-    final api = widget.rawApi;
+    final api = widget.api;
     if (api == null) {
       _showSnack('当前不可用：缺少 API 上下文');
       return;
@@ -537,10 +361,11 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     }
 
     final sortedGroups = [...friendGroups]
-      ..sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
-    String? selected = enriched.selectedGroupNames.isEmpty
-        ? null
-        : enriched.selectedGroupNames.first;
+      ..sort(
+        (a, b) =>
+            a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+      );
+    String? selected = enriched.selectedGroupName;
 
     final selectedResult = await showDialog<_FavoriteDialogResult>(
       context: context,
@@ -555,7 +380,9 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
                 children: [
                   ListTile(
                     title: const Text('不星标'),
-                    trailing: tempValue == null ? const Icon(Icons.check) : null,
+                    trailing: tempValue == null
+                        ? const Icon(Icons.check)
+                        : null,
                     onTap: () => setDialogState(() => tempValue = null),
                   ),
                   for (final group in sortedGroups)
@@ -598,7 +425,10 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     try {
       final existingFavoriteIds = await _loadFriendFavoriteRecordIds(api);
       for (final favoriteId in existingFavoriteIds) {
-        await api.getFavoritesApi().removeFavorite(favoriteId: favoriteId).validateVrc();
+        await api
+            .getFavoritesApi()
+            .removeFavorite(favoriteId: favoriteId)
+            .validateVrc();
       }
 
       if (selectedGroup != null) {
@@ -615,10 +445,8 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       }
 
       if (!mounted) return;
+      UserStore.instance.setUserFavoriteGroup(widget.userId, selectedGroup);
       _showSnack('星标已更新');
-      setState(() {
-        _enrichmentFuture = _fetchDetailEnrichment();
-      });
     } catch (e) {
       if (!mounted) return;
       _showSnack('调整星标失败: $e');
@@ -631,7 +459,9 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     }
   }
 
-  Future<List<String>> _loadFriendFavoriteRecordIds(VrchatDartGenerated api) async {
+  Future<List<String>> _loadFriendFavoriteRecordIds(
+    VrchatDartGenerated api,
+  ) async {
     final ids = <String>[];
     var offset = 0;
     const pageSize = 100;
@@ -654,7 +484,9 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
 
   void _showSnack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -666,47 +498,41 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         final enrichedUser = enriched?.user;
         final isDetailReady = snapshot.connectionState == ConnectionState.done;
         final resolvedAvatarUrl = _pickFirstNonEmpty([
-          widget.avatarUrl,
           enrichedUser?.currentAvatarImageUrl,
           enrichedUser?.currentAvatarThumbnailImageUrl,
         ]);
         final resolvedHeaderImageUrl = _pickFirstNonEmpty([
-          widget.imageUrl,
           enrichedUser?.profilePicOverride,
           enrichedUser?.profilePicOverrideThumbnail,
           enrichedUser?.currentAvatarImageUrl,
         ]);
-        final resolvedDisplayName = _pickFirstNonEmpty([
-              widget.displayName,
-              enriched?.displayName,
-            ]) ??
-            widget.userId;
+        final resolvedDisplayName = enrichedUser?.displayName ?? widget.userId;
+        final nameColor = _trustColor(enrichedUser?.tags ?? const []);
+
         return _FriendDetailPageContent(
           userId: widget.userId,
-          dio: widget.dio ?? FriendDetailPage._fallbackDio,
+          dio: FriendDetailPage._fallbackDio,
           displayName: resolvedDisplayName,
           avatarUrl: resolvedAvatarUrl,
           imageUrl: resolvedHeaderImageUrl,
           locationText: snapshot.data?.locationText,
-          bio: enrichedUser?.bio ?? widget.bio,
-          nameColor: widget.nameColor,
-          status: enrichedUser?.status ?? widget.status,
-          statusDescription:
-              enrichedUser?.statusDescription ?? widget.statusDescription,
-          pronouns: enrichedUser?.pronouns ?? widget.pronouns,
-          bioLinks: enrichedUser?.bioLinks ?? widget.bioLinks,
-          dateJoined: enrichedUser?.dateJoined ?? widget.dateJoined,
-          lastActivity:
-              (enrichedUser?.lastActivity != null
-                  ? DateTime.tryParse(enrichedUser!.lastActivity)
-                  : null) ??
-              widget.lastActivity,
+          bio: enrichedUser?.bio,
+          nameColor: nameColor,
+          status: enrichedUser?.status ?? UserStatus.offline,
+          statusDescription: enrichedUser?.statusDescription,
+          pronouns: enrichedUser?.pronouns,
+          bioLinks: enrichedUser?.bioLinks ?? const [],
+          dateJoined: enrichedUser?.dateJoined,
+          lastActivity: enrichedUser?.lastActivity != null
+              ? DateTime.tryParse(enrichedUser!.lastActivity!)
+              : null,
           mutualFriends: enriched?.mutualFriends,
-          rawApi: widget.rawApi,
+          api: widget.api,
           appBarActions: [
             PopupMenuButton<_DetailMoreAction>(
               enabled: !_menuActionLoading && isDetailReady && enriched != null,
-              onSelected: (action) => _onMoreAction(action, enriched ?? const _DetailEnrichment()),
+              onSelected: (action) =>
+                  _onMoreAction(action, enriched ?? const _DetailEnrichment()),
               itemBuilder: (_) => [
                 PopupMenuItem<_DetailMoreAction>(
                   value: _DetailMoreAction.friendAction,
@@ -732,6 +558,23 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     );
   }
 
+  Color _trustColor(List<String> tags) {
+    final trustTags = tags.map((e) => e.toLowerCase()).toSet();
+    if (trustTags.contains('system_trust_veteran')) {
+      return const Color(0xFF8E44AD);
+    }
+    if (trustTags.contains('system_trust_trusted')) {
+      return const Color(0xFFFF9800);
+    }
+    if (trustTags.contains('system_trust_known')) {
+      return const Color(0xFF4CAF50);
+    }
+    if (trustTags.contains('system_trust_basic')) {
+      return const Color(0xFF64B5F6);
+    }
+    return Colors.grey;
+  }
+
   String? _pickFirstNonEmpty(List<String?> values) {
     for (final value in values) {
       final normalized = value?.trim();
@@ -746,21 +589,26 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
 class _DetailEnrichment {
   const _DetailEnrichment({
     this.user,
-    this.displayName,
     this.locationText,
     this.isFriend = false,
     this.favoriteGroups = const [],
-    this.selectedGroupNames = const <String>{},
+    this.selectedGroupName,
     this.mutualFriends,
   });
 
   final User? user;
-  final String? displayName;
   final String? locationText;
   final bool isFriend;
-  final List<FavoriteGroup> favoriteGroups;
-  final Set<String> selectedGroupNames;
+  final List<_FavoriteGroupView> favoriteGroups;
+  final String? selectedGroupName;
   final List<MutualFriend>? mutualFriends;
+}
+
+class _FavoriteGroupView {
+  const _FavoriteGroupView({required this.name, required this.displayName});
+
+  final String name;
+  final String displayName;
 }
 
 enum _DetailMoreAction { friendAction, adjustFavorite }
@@ -778,10 +626,7 @@ class _FavoriteDialogResult {
 }
 
 class _ParsedLocation {
-  const _ParsedLocation({
-    required this.worldId,
-    required this.instanceId,
-  });
+  const _ParsedLocation({required this.worldId, required this.instanceId});
 
   final String worldId;
   final String instanceId;
@@ -804,7 +649,7 @@ class _FriendDetailPageContent extends StatelessWidget {
     this.dateJoined,
     this.lastActivity,
     this.mutualFriends,
-    this.rawApi,
+    this.api,
     this.appBarActions = const [],
   });
 
@@ -823,7 +668,7 @@ class _FriendDetailPageContent extends StatelessWidget {
   final DateTime? dateJoined;
   final DateTime? lastActivity;
   final List<MutualFriend>? mutualFriends;
-  final VrchatDartGenerated? rawApi;
+  final VrchatDartGenerated? api;
   final List<Widget> appBarActions;
 
   @override
@@ -839,8 +684,8 @@ class _FriendDetailPageContent extends StatelessWidget {
     final filteredMutualFriends = _visibleMutualFriends;
     final hiddenMutualCount = _hiddenMutualCount;
     final mutualTitle = hiddenMutualCount > 0
-      ? '共同好友 (${filteredMutualFriends.length}) ($hiddenMutualCount个隐藏)'
-      : '共同好友 (${filteredMutualFriends.length})';
+        ? '共同好友 (${filteredMutualFriends.length}) ($hiddenMutualCount个隐藏)'
+        : '共同好友 (${filteredMutualFriends.length})';
 
     return Scaffold(
       body: CustomScrollView(
@@ -899,7 +744,9 @@ class _FriendDetailPageContent extends StatelessWidget {
                           alignment: Alignment.centerLeft,
                           child: GestureDetector(
                             onLongPress: () async {
-                              await Clipboard.setData(ClipboardData(text: bioText));
+                              await Clipboard.setData(
+                                ClipboardData(text: bioText),
+                              );
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('个人介绍已复制')),
@@ -923,7 +770,11 @@ class _FriendDetailPageContent extends StatelessWidget {
                             scrollDirection: Axis.horizontal,
                             child: Row(
                               children: [
-                                for (var i = 0; i < visibleLinks.length; i++) ...[
+                                for (
+                                  var i = 0;
+                                  i < visibleLinks.length;
+                                  i++
+                                ) ...[
                                   FilledButton.tonal(
                                     onPressed: () =>
                                         _openBioLink(context, visibleLinks[i]),
@@ -978,10 +829,11 @@ class _FriendDetailPageContent extends StatelessWidget {
                       mutualTitle,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    childrenPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    children: [
-                      _buildMutualFriendsList(context),
-                    ],
+                    childrenPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    children: [_buildMutualFriendsList(context)],
                   ),
                 ),
               ),
@@ -1076,8 +928,10 @@ class _FriendDetailPageContent extends StatelessWidget {
     }
 
     final sortedFriends = [...visibleMutualFriends]
-      ..sort((a, b) =>
-          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+      ..sort(
+        (a, b) =>
+            a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+      );
 
     return GridView.count(
       crossAxisCount: 4,
@@ -1137,16 +991,9 @@ class _FriendDetailPageContent extends StatelessWidget {
     BuildContext context,
     MutualFriend friend,
   ) async {
-    final api = rawApi;
-
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            FriendDetailPage(
-              userId: friend.id,
-              rawApi: api,
-              dio: dio,
-            ),
+        builder: (_) => FriendDetailPage(userId: friend.id, api: api),
       ),
     );
   }
@@ -1268,7 +1115,7 @@ class _CollapsingHeader extends StatelessWidget {
                 children: [
                   GestureDetector(
                     onTap: onAvatarTap,
-                    child: _CachedUserAvatar(
+                    child: _TrustLevelAvatar(
                       userId: userId,
                       dio: dio,
                       imageUrl: avatarUrl,
@@ -1365,8 +1212,8 @@ class _CollapsingHeader extends StatelessWidget {
   }
 }
 
-class _CachedUserAvatar extends StatelessWidget {
-  const _CachedUserAvatar({
+class _TrustLevelAvatar extends StatelessWidget {
+  const _TrustLevelAvatar({
     required this.userId,
     required this.dio,
     required this.imageUrl,
@@ -1381,18 +1228,22 @@ class _CachedUserAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final normalizedUrl = imageUrl?.trim();
-    if (normalizedUrl != null && normalizedUrl.isNotEmpty) {
-      Future.microtask(
-        () => CacheManager.instance.imageCache.cacheAvatar(
-          dio: dio,
-          userId: userId,
-          imageUrl: normalizedUrl,
-        ),
-      );
+    final fileId = cache.ImageCache.extractFileIdFromUrl(normalizedUrl);
+
+    if (fileId == null || fileId.isEmpty) {
+      return VrcAvatar(dio: dio, imageUrl: normalizedUrl, size: size);
     }
 
+    Future.microtask(
+      () => cache.CacheManager.instance.imageCache.cacheByFileId(
+        dio: dio,
+        fileId: fileId,
+        imageUrl: normalizedUrl,
+      ),
+    );
+
     return FutureBuilder<Uint8List?>(
-      future: CacheManager.instance.imageCache.getAvatar(userId),
+      future: cache.CacheManager.instance.imageCache.getByFileId(fileId),
       builder: (context, snapshot) {
         final bytes = snapshot.data;
         if (bytes != null && bytes.isNotEmpty) {
@@ -1402,11 +1253,7 @@ class _CachedUserAvatar extends StatelessWidget {
             child: ClipOval(child: Image.memory(bytes, fit: BoxFit.cover)),
           );
         }
-        return VrcAvatar(
-          dio: dio,
-          imageUrl: normalizedUrl,
-          size: size,
-        );
+        return VrcAvatar(dio: dio, imageUrl: normalizedUrl, size: size);
       },
     );
   }
@@ -1428,18 +1275,22 @@ class _HeaderImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final normalizedUrl = imageUrl?.trim();
-    if (normalizedUrl != null && normalizedUrl.isNotEmpty) {
-      Future.microtask(
-        () => CacheManager.instance.imageCache.cacheProfile(
-          dio: dio,
-          userId: userId,
-          imageUrl: normalizedUrl,
-        ),
-      );
+    final fileId = cache.ImageCache.extractFileIdFromUrl(normalizedUrl);
+
+    if (fileId == null || fileId.isEmpty) {
+      return _buildPlaceholderOrNetworkImage(context, normalizedUrl);
     }
 
+    Future.microtask(
+      () => cache.CacheManager.instance.imageCache.cacheByFileId(
+        dio: dio,
+        fileId: fileId,
+        imageUrl: normalizedUrl,
+      ),
+    );
+
     return FutureBuilder<Uint8List?>(
-      future: CacheManager.instance.imageCache.getProfile(userId),
+      future: cache.CacheManager.instance.imageCache.getByFileId(fileId),
       builder: (context, snapshot) {
         final bytes = snapshot.data;
         if (bytes != null && bytes.isNotEmpty) {
@@ -1449,35 +1300,38 @@ class _HeaderImage extends StatelessWidget {
             child: Image.memory(bytes, fit: BoxFit.cover),
           );
         }
-
-        if (normalizedUrl == null || normalizedUrl.isEmpty) {
-          return Container(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: const Center(
-              child: Icon(Icons.image_not_supported_outlined, size: 40),
-            ),
-          );
-        }
-
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onTap,
-          child: VrcNetworkImage(
-            dio: dio,
-            imageUrl: normalizedUrl,
-            fit: BoxFit.cover,
-            placeholder: Container(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            ),
-            errorWidget: Container(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: const Center(
-                child: Icon(Icons.broken_image_outlined, size: 40),
-              ),
-            ),
-          ),
-        );
+        return _buildPlaceholderOrNetworkImage(context, normalizedUrl);
       },
+    );
+  }
+
+  Widget _buildPlaceholderOrNetworkImage(BuildContext context, String? url) {
+    if (url == null || url.isEmpty) {
+      return Container(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: const Center(
+          child: Icon(Icons.image_not_supported_outlined, size: 40),
+        ),
+      );
+    }
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: VrcNetworkImage(
+        dio: dio,
+        imageUrl: url,
+        fit: BoxFit.cover,
+        placeholder: Container(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        ),
+        errorWidget: Container(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          child: const Center(
+            child: Icon(Icons.broken_image_outlined, size: 40),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1586,9 +1440,7 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             savedPath.isEmpty ? '图片已保存到 Pictures' : '图片已保存到: $savedPath',
