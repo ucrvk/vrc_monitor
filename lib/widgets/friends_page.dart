@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/utils/location_utils.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/friend_search_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
@@ -180,6 +181,17 @@ class _FriendsPageState extends State<FriendsPage> {
 
     for (final friend in onlineFriends) {
       final location = friend.location?.trim() ?? '';
+
+      if (LocationUtils.isTraveling(location)) {
+        final travelingTo = friend.travelingToLocation?.trim() ?? '';
+        final parsed = cache.CacheManager.parseLocation(travelingTo);
+        final worldId = parsed?.worldId;
+        if (worldId != null && !_worldNameById.containsKey(worldId)) {
+          worldIds.add(worldId);
+        }
+        continue;
+      }
+
       final parsed = cache.CacheManager.parseLocation(location);
       final worldId = parsed?.worldId;
       if (worldId != null && !_worldNameById.containsKey(worldId)) {
@@ -298,13 +310,22 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   String _locationTextFor(User friend) {
-    final location = friend.location?.trim() ?? '';
+    final eventLocation = _userStore.getEventLocation(friend.id);
+    final eventWorldName = _userStore.getEventWorldName(friend.id);
+    final location = (eventLocation ?? friend.location)?.trim() ?? '';
     final lower = location.toLowerCase();
     if (friend.status != UserStatus.offline && lower == 'offline') {
       return '在网页或其他端登录';
     }
     if (lower.contains('private')) return '在私人房间';
     if (lower == 'offline') return '离线';
+
+    if (LocationUtils.isTraveling(location)) {
+      if (eventWorldName != null && eventWorldName.isNotEmpty) {
+        return '⟳ 正在前往 $eventWorldName';
+      }
+      return '⟳ 正在前往...';
+    }
 
     final parsed = cache.CacheManager.parseLocation(location);
     if (parsed == null) return location;
@@ -315,8 +336,16 @@ class _FriendsPageState extends State<FriendsPage> {
         : worldName;
 
     final typeLabel = _instanceTypeByLocation[parsed.rawLocation];
-    if (typeLabel == null || typeLabel.isEmpty) return base;
-    return '$base - $typeLabel';
+    final regionEmoji = LocationUtils.getRegionEmoji(location);
+
+    final locationWithLabel = (typeLabel == null || typeLabel.isEmpty)
+        ? base
+        : '$base - $typeLabel';
+
+    if (regionEmoji != null) {
+      return '$regionEmoji $locationWithLabel';
+    }
+    return locationWithLabel;
   }
 
   String? _pickAvatarUrl(User user) {
@@ -585,9 +614,7 @@ class _FriendsPageState extends State<FriendsPage> {
           pronouns: user.pronouns,
           bioLinks: user.bioLinks ?? const [],
           dateJoined: user.dateJoined,
-          lastActivity: user.lastActivity != null
-              ? DateTime.tryParse(user.lastActivity!)
-              : null,
+          lastActivity: DateTime.tryParse(user.lastActivity),
           profilePicOverrideThumbnail: user.profilePicOverrideThumbnail,
           profilePicOverride: user.profilePicOverride,
           currentAvatarThumbnailImageUrl: user.currentAvatarThumbnailImageUrl,

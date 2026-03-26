@@ -143,6 +143,8 @@ class UserStore extends ChangeNotifier {
   final Map<String, User> _users = <String, User>{};
   final Map<String, String> _avatarFileIdByUserId = <String, String>{};
   final Map<String, String> _headerFileIdByUserId = <String, String>{};
+  final Map<String, String> _locationByUserId = <String, String>{};
+  final Map<String, String> _worldNameByUserId = <String, String>{};
   final Map<String, LimitedUserFriend> _limitedUsers =
       <String, LimitedUserFriend>{};
   final Map<String, List<MutualFriend>> _mutualFriends =
@@ -400,18 +402,30 @@ class UserStore extends ChangeNotifier {
         final e = event as FriendOnlineEvent;
         _allFriendIds.add(e.user.id);
         _onlineFriendIds.add(e.user.id);
+        if (e.location != null && e.location!.isNotEmpty) {
+          _locationByUserId[e.user.id] = e.location!;
+        }
         _setUser(e.user);
         break;
       case VrcStreamingEventType.friendLocation:
         final e = event as FriendLocationEvent;
         _allFriendIds.add(e.user.id);
         _onlineFriendIds.add(e.user.id);
+        if (e.location != null && e.location!.isNotEmpty) {
+          _locationByUserId[e.user.id] = e.location!;
+          final world = e.world;
+          if (world != null && world.id.isNotEmpty) {
+            _worldNameByUserId[e.user.id] = world.name;
+          }
+        }
         _setUser(e.user);
         break;
       case VrcStreamingEventType.friendOffline:
         final e = event as FriendOfflineEvent;
         _allFriendIds.add(e.userId);
         _onlineFriendIds.remove(e.userId);
+        _locationByUserId.remove(e.userId);
+        _worldNameByUserId.remove(e.userId);
         break;
       case VrcStreamingEventType.friendAdd:
         final e = event as FriendAddEvent;
@@ -428,6 +442,9 @@ class UserStore extends ChangeNotifier {
         _limitedUsers.remove(e.userId);
         _users.remove(e.userId);
         _avatarFileIdByUserId.remove(e.userId);
+        _headerFileIdByUserId.remove(e.userId);
+        _locationByUserId.remove(e.userId);
+        _worldNameByUserId.remove(e.userId);
         _mutualFriends.remove(e.userId);
         _friendStatuses.remove(e.userId);
         break;
@@ -498,6 +515,10 @@ class UserStore extends ChangeNotifier {
   }
 
   String? getHeaderFileId(String userId) => _headerFileIdByUserId[userId];
+
+  String? getEventLocation(String userId) => _locationByUserId[userId];
+
+  String? getEventWorldName(String userId) => _worldNameByUserId[userId];
 
   void _setUser(User user) {
     _users[user.id] = user;

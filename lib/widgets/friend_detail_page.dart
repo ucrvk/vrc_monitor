@@ -12,6 +12,7 @@ import 'package:vrc_monitor/network/vrc_network_image.dart';
 import 'package:vrc_monitor/network/web_client.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/utils/location_utils.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
 
 class FriendDetailPage extends StatefulWidget {
@@ -64,9 +65,12 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
 
       final isFriend = friendStatus?.isFriend ?? false;
 
+      final eventLocation = userStore.getEventLocation(widget.userId);
+      final eventWorldName = userStore.getEventWorldName(widget.userId);
       final locationText = await _resolveLocationText(
         status: user?.status ?? UserStatus.offline,
-        rawLocation: user?.location,
+        eventLocation: eventLocation ?? user?.location,
+        eventWorldName: eventWorldName,
         api: api,
       );
 
@@ -139,17 +143,25 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
 
   Future<String?> _resolveLocationText({
     required UserStatus status,
-    required String? rawLocation,
+    required String? eventLocation,
+    String? eventWorldName,
     required VrchatDartGenerated? api,
   }) async {
     if (status == UserStatus.offline) return null;
 
-    final location = rawLocation?.trim() ?? '';
+    final location = eventLocation?.trim() ?? '';
     if (location.isEmpty) return null;
     final lower = location.toLowerCase();
 
     if (lower == 'offline') return '在网页或其他端登录';
     if (lower.contains('private')) return '在私人房间';
+
+    if (LocationUtils.isTraveling(location)) {
+      if (eventWorldName != null && eventWorldName.isNotEmpty) {
+        return '⟳ 正在前往 $eventWorldName';
+      }
+      return '⟳ 正在前往...';
+    }
 
     final parsed = _parseLocation(location);
     if (parsed == null || api == null) return location;
@@ -183,35 +195,46 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         .instance
         .memoryCache
         .instanceTypeByLocation[location];
-    if (cachedType != null && cachedType.trim().isNotEmpty) {
-      return '$base - ${cachedType.trim()}';
-    }
+
+    final locationWithLabel =
+        (cachedType != null && cachedType.trim().isNotEmpty)
+        ? '$base - ${cachedType.trim()}'
+        : base;
 
     try {
-      final (instanceSuccess, _) = await api
-          .getWorldsApi()
-          .getWorldInstance(
-            worldId: parsed.worldId,
-            instanceId: parsed.instanceId,
-          )
-          .validateVrc();
-      final instance = instanceSuccess?.data;
-      if (instance == null) return base;
-
-      final typeLabel = _instanceTypeLabel(
-        instance.type,
-        canRequestInvite: instance.canRequestInvite ?? false,
-      );
-      if (typeLabel.isEmpty) return base;
-      cache.CacheManager.instance.memoryCache.putInstanceType(
-        location,
-        typeLabel,
-      );
-      return '$base - $typeLabel';
+      if (cachedType == null || cachedType.trim().isEmpty) {
+        final (instanceSuccess, _) = await api
+            .getWorldsApi()
+            .getWorldInstance(
+              worldId: parsed.worldId,
+              instanceId: parsed.instanceId,
+            )
+            .validateVrc();
+        final instance = instanceSuccess?.data;
+        if (instance != null) {
+          final typeLabel = _instanceTypeLabel(
+            instance.type,
+            canRequestInvite: instance.canRequestInvite ?? false,
+          );
+          if (typeLabel.isNotEmpty) {
+            cache.CacheManager.instance.memoryCache.putInstanceType(
+              location,
+              typeLabel,
+            );
+            final result = '$base - $typeLabel';
+            final regionEmoji = LocationUtils.getRegionEmoji(location);
+            return regionEmoji != null ? '$regionEmoji $result' : result;
+          }
+        }
+      }
     } catch (e) {
       debugPrint('Failed to resolve world instance type: $e');
-      return base;
     }
+
+    final regionEmoji = LocationUtils.getRegionEmoji(location);
+    return regionEmoji != null
+        ? '$regionEmoji $locationWithLabel'
+        : locationWithLabel;
   }
 
   _ParsedLocation? _parseLocation(String location) {
@@ -548,7 +571,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
           bioLinks: enrichedUser?.bioLinks ?? const [],
           dateJoined: enrichedUser?.dateJoined,
           lastActivity: enrichedUser?.lastActivity != null
-              ? DateTime.tryParse(enrichedUser!.lastActivity!)
+              ? DateTime.tryParse(enrichedUser!.lastActivity)
               : null,
           mutualFriends: enriched?.mutualFriends,
           api: widget.api,
