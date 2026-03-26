@@ -43,24 +43,20 @@ class UserAvatarInfo {
     if (hasUserIcon) {
       avatarFullUrl = userIcon;
       avatarSmallUrl = userIcon;
-
-      if (profilePic.isNotEmpty) {
-        headerFullUrl = profilePic;
-        headerSmallUrl = _toSmallUrl(profilePic, isCustom: true);
-      } else if (avatarImg.isNotEmpty) {
-        headerFullUrl = _ensureFileEnding(avatarImg);
-        headerSmallUrl = _toSmallUrl(headerFullUrl, isCustom: false);
-      }
     } else if (profilePic.isNotEmpty) {
       avatarFullUrl = profilePic;
       avatarSmallUrl = _toSmallUrl(profilePic, isCustom: true);
-      headerFullUrl = avatarFullUrl;
-      headerSmallUrl = avatarSmallUrl;
     } else if (avatarImg.isNotEmpty) {
       avatarFullUrl = _ensureFileEnding(avatarImg);
       avatarSmallUrl = _toSmallUrl(avatarFullUrl, isCustom: false);
-      headerFullUrl = avatarFullUrl;
-      headerSmallUrl = avatarSmallUrl;
+    }
+
+    if (profilePic.isNotEmpty) {
+      headerFullUrl = profilePic;
+      headerSmallUrl = _toSmallUrl(profilePic, isCustom: true);
+    } else if (avatarImg.isNotEmpty) {
+      headerFullUrl = _ensureFileEnding(avatarImg);
+      headerSmallUrl = _toSmallUrl(headerFullUrl, isCustom: false);
     }
 
     return UserAvatarInfo(
@@ -89,24 +85,20 @@ class UserAvatarInfo {
     if (hasUserIcon) {
       avatarFullUrl = userIcon;
       avatarSmallUrl = userIcon;
-
-      if (profilePic.isNotEmpty) {
-        headerFullUrl = profilePic;
-        headerSmallUrl = _toSmallUrl(profilePic, isCustom: true);
-      } else if (avatarImg.isNotEmpty) {
-        headerFullUrl = _ensureFileEnding(avatarImg);
-        headerSmallUrl = _toSmallUrl(headerFullUrl, isCustom: false);
-      }
     } else if (profilePic.isNotEmpty) {
       avatarFullUrl = profilePic;
       avatarSmallUrl = _toSmallUrl(profilePic, isCustom: true);
-      headerFullUrl = avatarFullUrl;
-      headerSmallUrl = avatarSmallUrl;
     } else if (avatarImg.isNotEmpty) {
       avatarFullUrl = _ensureFileEnding(avatarImg);
       avatarSmallUrl = _toSmallUrl(avatarFullUrl, isCustom: false);
-      headerFullUrl = avatarFullUrl;
-      headerSmallUrl = avatarSmallUrl;
+    }
+
+    if (profilePic.isNotEmpty) {
+      headerFullUrl = profilePic;
+      headerSmallUrl = _toSmallUrl(profilePic, isCustom: true);
+    } else if (avatarImg.isNotEmpty) {
+      headerFullUrl = _ensureFileEnding(avatarImg);
+      headerSmallUrl = _toSmallUrl(headerFullUrl, isCustom: false);
     }
 
     return UserAvatarInfo(
@@ -150,6 +142,7 @@ class UserStore extends ChangeNotifier {
   final Set<String> _onlineFriendIds = <String>{};
   final Map<String, User> _users = <String, User>{};
   final Map<String, String> _avatarFileIdByUserId = <String, String>{};
+  final Map<String, String> _headerFileIdByUserId = <String, String>{};
   final Map<String, LimitedUserFriend> _limitedUsers =
       <String, LimitedUserFriend>{};
   final Map<String, List<MutualFriend>> _mutualFriends =
@@ -261,9 +254,13 @@ class UserStore extends ChangeNotifier {
     for (final friend in offline) {
       _allFriendIds.add(friend.id);
       _limitedUsers[friend.id] = friend;
-      final fileId = _extractAvatarFileIdFromLimitedUser(friend);
-      if (fileId != null) {
-        _avatarFileIdByUserId[friend.id] = fileId;
+      final avatarFileId = _extractAvatarFileIdFromLimitedUser(friend);
+      if (avatarFileId != null) {
+        _avatarFileIdByUserId[friend.id] = avatarFileId;
+      }
+      final headerFileId = _extractHeaderFileIdFromLimitedUser(friend);
+      if (headerFileId != null) {
+        _headerFileIdByUserId[friend.id] = headerFileId;
       }
     }
   }
@@ -500,11 +497,17 @@ class UserStore extends ChangeNotifier {
     return null;
   }
 
+  String? getHeaderFileId(String userId) => _headerFileIdByUserId[userId];
+
   void _setUser(User user) {
     _users[user.id] = user;
-    final fileId = _extractAvatarFileId(user);
-    if (fileId != null) {
-      _avatarFileIdByUserId[user.id] = fileId;
+    final avatarFileId = _extractAvatarFileId(user);
+    if (avatarFileId != null) {
+      _avatarFileIdByUserId[user.id] = avatarFileId;
+    }
+    final headerFileId = _extractHeaderFileId(user);
+    if (headerFileId != null) {
+      _headerFileIdByUserId[user.id] = headerFileId;
     }
   }
 
@@ -527,12 +530,40 @@ class UserStore extends ChangeNotifier {
     return null;
   }
 
+  static String? _extractHeaderFileId(User user) {
+    final profilePic = user.profilePicOverride.trim();
+    if (profilePic.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(profilePic);
+    }
+
+    final avatarImg = user.currentAvatarImageUrl.trim();
+    if (avatarImg.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(avatarImg);
+    }
+
+    return null;
+  }
+
   static String? _extractAvatarFileIdFromLimitedUser(LimitedUserFriend user) {
     final userIcon = user.userIcon?.trim() ?? '';
     if (userIcon.isNotEmpty) {
       return cache.ImageCache.extractFileIdFromUrl(userIcon);
     }
 
+    final profilePic = user.profilePicOverride?.trim() ?? '';
+    if (profilePic.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(profilePic);
+    }
+
+    final avatarImg = user.currentAvatarImageUrl?.trim() ?? '';
+    if (avatarImg.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(avatarImg);
+    }
+
+    return null;
+  }
+
+  static String? _extractHeaderFileIdFromLimitedUser(LimitedUserFriend user) {
     final profilePic = user.profilePicOverride?.trim() ?? '';
     if (profilePic.isNotEmpty) {
       return cache.ImageCache.extractFileIdFromUrl(profilePic);
@@ -617,6 +648,7 @@ class UserStore extends ChangeNotifier {
     _onlineFriendIds.clear();
     _users.clear();
     _avatarFileIdByUserId.clear();
+    _headerFileIdByUserId.clear();
     _limitedUsers.clear();
     _mutualFriends.clear();
     _friendStatuses.clear();

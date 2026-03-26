@@ -513,9 +513,13 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         final avatarInfo = UserStore.instance.getAvatarInfo(widget.userId);
         final resolvedAvatarUrl = avatarInfo?.avatarSmallUrl;
         final resolvedHeaderImageUrl = avatarInfo?.headerSmallUrl;
-        final avatarFullUrl = avatarInfo?.avatarFullUrl;
-        final headerFullUrl = avatarInfo?.headerFullUrl;
         final avatarFileId = UserStore.instance.getAvatarFileId(widget.userId);
+        final headerFileId = UserStore.instance.getHeaderFileId(widget.userId);
+
+        final userIcon = enrichedUser?.userIcon.trim();
+        final profilePicOverride = enrichedUser?.profilePicOverride.trim();
+        final currentAvatarImageUrl = enrichedUser?.currentAvatarImageUrl
+            .trim();
 
         final resolvedDisplayName = enrichedUser?.displayName ?? widget.userId;
         final nameColor = _trustColor(enrichedUser?.tags ?? const []);
@@ -527,8 +531,14 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
           avatarUrl: resolvedAvatarUrl,
           avatarFileId: avatarFileId,
           imageUrl: resolvedHeaderImageUrl,
-          avatarFullUrl: avatarFullUrl,
-          headerFullUrl: headerFullUrl,
+          headerFileId: headerFileId,
+          userIcon: userIcon?.isNotEmpty == true ? userIcon : null,
+          profilePicOverride: profilePicOverride?.isNotEmpty == true
+              ? profilePicOverride
+              : null,
+          currentAvatarImageUrl: currentAvatarImageUrl?.isNotEmpty == true
+              ? currentAvatarImageUrl
+              : null,
           locationText: snapshot.data?.locationText,
           bio: enrichedUser?.bio,
           nameColor: nameColor,
@@ -644,8 +654,10 @@ class _FriendDetailPageContent extends StatelessWidget {
     this.avatarUrl,
     this.avatarFileId,
     this.imageUrl,
-    this.avatarFullUrl,
-    this.headerFullUrl,
+    this.headerFileId,
+    this.userIcon,
+    this.profilePicOverride,
+    this.currentAvatarImageUrl,
     this.locationText,
     this.bio,
     this.nameColor,
@@ -666,8 +678,10 @@ class _FriendDetailPageContent extends StatelessWidget {
   final String? avatarUrl;
   final String? avatarFileId;
   final String? imageUrl;
-  final String? avatarFullUrl;
-  final String? headerFullUrl;
+  final String? headerFileId;
+  final String? userIcon;
+  final String? profilePicOverride;
+  final String? currentAvatarImageUrl;
   final String? locationText;
   final String? bio;
   final Color? nameColor;
@@ -713,21 +727,15 @@ class _FriendDetailPageContent extends StatelessWidget {
               avatarUrl: avatarUrl,
               avatarFileId: avatarFileId,
               imageUrl: imageUrl,
+              headerFileId: headerFileId,
+              userIcon: userIcon,
+              profilePicOverride: profilePicOverride,
+              currentAvatarImageUrl: currentAvatarImageUrl,
               nameColor: nameColor,
               expandedHeight: expandedHeaderHeight,
               status: status,
               statusDescription: statusDescription,
               pronouns: pronouns,
-              onAvatarTap: () => _openImagePreview(
-                context,
-                imageUrl: avatarFullUrl,
-                title: '头像',
-              ),
-              onHeaderTap: () => _openImagePreview(
-                context,
-                imageUrl: headerFullUrl,
-                title: '背景图',
-              ),
             ),
           ),
           SliverToBoxAdapter(
@@ -860,27 +868,6 @@ class _FriendDetailPageContent extends StatelessWidget {
     );
   }
 
-  Future<void> _openImagePreview(
-    BuildContext context, {
-    required String? imageUrl,
-    required String title,
-  }) async {
-    final url = imageUrl?.trim() ?? '';
-    if (url.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('没有可预览的图片')));
-      return;
-    }
-
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) =>
-            _ImagePreviewPage(dio: dio, imageUrl: url, title: title),
-      ),
-    );
-  }
-
   static List<String> _sanitizeBioLinks(List<String> rawLinks) {
     final unique = <String>{};
     for (final raw in rawLinks) {
@@ -966,7 +953,8 @@ class _FriendDetailPageContent extends StatelessWidget {
               children: [
                 VrcAvatar(
                   dio: dio,
-                  imageUrl: friend.currentAvatarImageUrl,
+                  imageUrl: _mutualFriendAvatarUrl(friend),
+                  fileId: _mutualFriendAvatarFileId(friend),
                   size: 44,
                 ),
                 const SizedBox(height: 6),
@@ -984,6 +972,40 @@ class _FriendDetailPageContent extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  String? _mutualFriendAvatarUrl(MutualFriend friend) {
+    final profilePic = friend.profilePicOverride?.trim() ?? '';
+    if (profilePic.isNotEmpty) {
+      return cache.ImageCache.toSmallUrl(profilePic, isCustom: true);
+    }
+
+    final avatarImg = friend.currentAvatarImageUrl.trim();
+    if (avatarImg.isNotEmpty) {
+      var fullUrl = avatarImg;
+      if (fullUrl.contains('/image/') &&
+          !fullUrl.endsWith('/file') &&
+          !fullUrl.endsWith('/256')) {
+        fullUrl = '$fullUrl/file';
+      }
+      return cache.ImageCache.toSmallUrl(fullUrl, isCustom: false);
+    }
+
+    return null;
+  }
+
+  String? _mutualFriendAvatarFileId(MutualFriend friend) {
+    final profilePic = friend.profilePicOverride?.trim() ?? '';
+    if (profilePic.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(profilePic);
+    }
+
+    final avatarImg = friend.currentAvatarImageUrl.trim();
+    if (avatarImg.isNotEmpty) {
+      return cache.ImageCache.extractFileIdFromUrl(avatarImg);
+    }
+
+    return null;
   }
 
   List<MutualFriend> get _visibleMutualFriends {
@@ -1024,13 +1046,15 @@ class _CollapsingHeader extends StatelessWidget {
     required this.avatarUrl,
     this.avatarFileId,
     required this.imageUrl,
+    this.headerFileId,
+    this.userIcon,
+    this.profilePicOverride,
+    this.currentAvatarImageUrl,
     required this.nameColor,
     required this.expandedHeight,
     required this.status,
     required this.statusDescription,
     required this.pronouns,
-    required this.onAvatarTap,
-    required this.onHeaderTap,
   });
 
   final String userId;
@@ -1039,13 +1063,15 @@ class _CollapsingHeader extends StatelessWidget {
   final String? avatarUrl;
   final String? avatarFileId;
   final String? imageUrl;
+  final String? headerFileId;
+  final String? userIcon;
+  final String? profilePicOverride;
+  final String? currentAvatarImageUrl;
   final Color? nameColor;
   final double expandedHeight;
   final UserStatus status;
   final String? statusDescription;
   final String? pronouns;
-  final VoidCallback onAvatarTap;
-  final VoidCallback onHeaderTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1101,7 +1127,8 @@ class _CollapsingHeader extends StatelessWidget {
                     userId: userId,
                     dio: dio,
                     imageUrl: imageUrl,
-                    onTap: onHeaderTap,
+                    fileId: headerFileId,
+                    onTap: () => _openHeaderPreview(context),
                   ),
                 ),
               ),
@@ -1133,7 +1160,7 @@ class _CollapsingHeader extends StatelessWidget {
               child: Row(
                 children: [
                   GestureDetector(
-                    onTap: onAvatarTap,
+                    onTap: () => _openAvatarPreview(context),
                     child: _TrustLevelAvatar(
                       userId: userId,
                       dio: dio,
@@ -1230,6 +1257,62 @@ class _CollapsingHeader extends StatelessWidget {
       UserStatus.offline => 'offline',
     };
   }
+
+  Future<void> _openAvatarPreview(BuildContext context) async {
+    final hasUserIcon = userIcon != null && userIcon!.trim().isNotEmpty;
+    final previewUrl = hasUserIcon
+        ? userIcon!.trim()
+        : (currentAvatarImageUrl?.trim() ?? '');
+
+    if (previewUrl.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('没有可预览的图片')));
+      }
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _ImagePreviewPage(
+          dio: dio,
+          imageUrl: previewUrl,
+          title: '头像',
+          useCache: hasUserIcon,
+          fileId: hasUserIcon ? avatarFileId : null,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openHeaderPreview(BuildContext context) async {
+    final hasProfilePic =
+        profilePicOverride != null && profilePicOverride!.trim().isNotEmpty;
+    final previewUrl = hasProfilePic
+        ? profilePicOverride!.trim()
+        : (currentAvatarImageUrl?.trim() ?? '');
+
+    if (previewUrl.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('没有可预览的图片')));
+      }
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _ImagePreviewPage(
+          dio: dio,
+          imageUrl: previewUrl,
+          title: '背景图',
+          useCache: false,
+        ),
+      ),
+    );
+  }
 }
 
 class _TrustLevelAvatar extends StatelessWidget {
@@ -1285,54 +1368,118 @@ class _TrustLevelAvatar extends StatelessWidget {
   }
 }
 
-class _HeaderImage extends StatelessWidget {
+class _HeaderImage extends StatefulWidget {
   const _HeaderImage({
     required this.userId,
     required this.dio,
     this.imageUrl,
+    this.fileId,
     this.onTap,
   });
 
   final String userId;
   final Dio dio;
   final String? imageUrl;
+  final String? fileId;
   final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) {
-    final normalizedUrl = imageUrl?.trim();
-    final fileId = cache.ImageCache.extractFileIdFromUrl(normalizedUrl);
+  State<_HeaderImage> createState() => _HeaderImageState();
+}
 
-    if (fileId == null || fileId.isEmpty) {
-      return _buildPlaceholderOrNetworkImage(context, normalizedUrl);
-    }
+class _HeaderImageState extends State<_HeaderImage> {
+  Uint8List? _cachedBytes;
+  bool _isLoading = true;
 
-    Future.microtask(
-      () => cache.CacheManager.instance.imageCache.cacheByFileId(
-        dio: dio,
-        fileId: fileId,
-        imageUrl: normalizedUrl,
-      ),
-    );
-
-    return FutureBuilder<Uint8List?>(
-      future: cache.CacheManager.instance.imageCache.getByFileId(fileId),
-      builder: (context, snapshot) {
-        final bytes = snapshot.data;
-        if (bytes != null && bytes.isNotEmpty) {
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onTap,
-            child: Image.memory(bytes, fit: BoxFit.cover),
-          );
-        }
-        return _buildPlaceholderOrNetworkImage(context, normalizedUrl);
-      },
-    );
+  @override
+  void initState() {
+    super.initState();
+    _loadImage();
   }
 
-  Widget _buildPlaceholderOrNetworkImage(BuildContext context, String? url) {
-    if (url == null || url.isEmpty) {
+  @override
+  void didUpdateWidget(_HeaderImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageUrl != widget.imageUrl ||
+        oldWidget.fileId != widget.fileId) {
+      setState(() {
+        _cachedBytes = null;
+        _isLoading = true;
+      });
+      _loadImage();
+    }
+  }
+
+  Future<void> _loadImage() async {
+    final normalizedUrl = widget.imageUrl?.trim();
+    final resolvedFileId = widget.fileId?.trim().isNotEmpty == true
+        ? widget.fileId!.trim()
+        : cache.ImageCache.extractFileIdFromUrl(normalizedUrl);
+
+    if (resolvedFileId == null ||
+        resolvedFileId.isEmpty ||
+        normalizedUrl == null ||
+        normalizedUrl.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _cachedBytes = null;
+          _isLoading = false;
+        });
+      }
+      return;
+    }
+
+    var bytes = await cache.CacheManager.instance.imageCache.getByFileId(
+      resolvedFileId,
+    );
+
+    if (bytes != null && bytes.isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          _cachedBytes = bytes;
+          _isLoading = false;
+        });
+      }
+      return;
+    }
+
+    await cache.CacheManager.instance.imageCache.cacheByFileId(
+      dio: widget.dio,
+      fileId: resolvedFileId,
+      imageUrl: normalizedUrl,
+    );
+
+    bytes = await cache.CacheManager.instance.imageCache.getByFileId(
+      resolvedFileId,
+    );
+
+    if (mounted) {
+      setState(() {
+        _cachedBytes = bytes;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final normalizedUrl = widget.imageUrl?.trim();
+    final resolvedFileId = widget.fileId?.trim().isNotEmpty == true
+        ? widget.fileId!.trim()
+        : cache.ImageCache.extractFileIdFromUrl(normalizedUrl);
+
+    if (_cachedBytes != null && _cachedBytes!.isNotEmpty) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Image.memory(_cachedBytes!, fit: BoxFit.cover),
+      );
+    }
+
+    if (resolvedFileId == null ||
+        resolvedFileId.isEmpty ||
+        normalizedUrl == null ||
+        normalizedUrl.isEmpty) {
       return Container(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         child: const Center(
@@ -1341,12 +1488,18 @@ class _HeaderImage extends StatelessWidget {
       );
     }
 
+    if (_isLoading) {
+      return Container(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      );
+    }
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: onTap,
+      onTap: widget.onTap,
       child: VrcNetworkImage(
-        dio: dio,
-        imageUrl: url,
+        dio: widget.dio,
+        imageUrl: normalizedUrl,
         fit: BoxFit.cover,
         placeholder: Container(
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -1367,11 +1520,15 @@ class _ImagePreviewPage extends StatefulWidget {
     required this.dio,
     required this.imageUrl,
     required this.title,
+    this.useCache = false,
+    this.fileId,
   });
 
   final Dio dio;
   final String imageUrl;
   final String title;
+  final bool useCache;
+  final String? fileId;
 
   @override
   State<_ImagePreviewPage> createState() => _ImagePreviewPageState();
@@ -1384,27 +1541,26 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
   @override
   void initState() {
     super.initState();
-    _imageFuture = _loadFullImage(widget.imageUrl);
+    _imageFuture = _loadFullImage();
   }
 
-  Future<Uint8List?> _loadFullImage(String url) async {
-    final imageCache = cache.CacheManager.instance.imageCache;
-    final fileId = cache.ImageCache.extractFileIdFromUrl(url);
+  Future<Uint8List?> _loadFullImage() async {
+    if (widget.useCache) {
+      final imageCache = cache.CacheManager.instance.imageCache;
+      final fileId =
+          widget.fileId ??
+          cache.ImageCache.extractFileIdFromUrl(widget.imageUrl);
 
-    if (fileId != null && fileId.isNotEmpty) {
-      final cached = await imageCache.getByFileId(fileId);
-      if (cached != null && cached.isNotEmpty) return cached;
-
-      await imageCache.cacheByFileId(
-        dio: widget.dio,
-        fileId: fileId,
-        imageUrl: url,
-      );
-      final fresh = await imageCache.getByFileId(fileId);
-      if (fresh != null && fresh.isNotEmpty) return fresh;
+      if (fileId != null && fileId.isNotEmpty) {
+        final cached = await imageCache.getByFileId(fileId);
+        if (cached != null && cached.isNotEmpty) return cached;
+      }
     }
 
-    return VrcNetworkImage.loadBytes(dio: widget.dio, imageUrl: url);
+    return VrcNetworkImage.loadBytes(
+      dio: widget.dio,
+      imageUrl: widget.imageUrl,
+    );
   }
 
   @override
