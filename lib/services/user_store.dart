@@ -2,12 +2,95 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 
 class FavoriteGroupData {
   const FavoriteGroupData({required this.name, required this.displayName});
 
   final String name;
   final String displayName;
+}
+
+class UserAvatarInfo {
+  const UserAvatarInfo({
+    this.avatarSmallUrl,
+    this.avatarFullUrl,
+    this.headerSmallUrl,
+    this.headerFullUrl,
+    this.hasCustomIcon = false,
+  });
+
+  final String? avatarSmallUrl;
+  final String? avatarFullUrl;
+  final String? headerSmallUrl;
+  final String? headerFullUrl;
+  final bool hasCustomIcon;
+
+  static UserAvatarInfo fromUser(User? user) {
+    if (user == null) return const UserAvatarInfo();
+
+    final userIcon = user.userIcon.trim();
+    final hasUserIcon = userIcon.isNotEmpty;
+
+    final profilePic = user.profilePicOverride.trim();
+    final avatarImg = user.currentAvatarImageUrl.trim();
+
+    String? avatarSmallUrl;
+    String? avatarFullUrl;
+    String? headerSmallUrl;
+    String? headerFullUrl;
+
+    if (hasUserIcon) {
+      avatarFullUrl = userIcon;
+      avatarSmallUrl = userIcon;
+
+      if (profilePic.isNotEmpty) {
+        headerFullUrl = profilePic;
+        headerSmallUrl = _toSmallUrl(profilePic, isCustom: true);
+      } else if (avatarImg.isNotEmpty) {
+        headerFullUrl = _ensureFileEnding(avatarImg);
+        headerSmallUrl = _toSmallUrl(headerFullUrl, isCustom: false);
+      }
+    } else if (profilePic.isNotEmpty) {
+      avatarFullUrl = profilePic;
+      avatarSmallUrl = _toSmallUrl(profilePic, isCustom: true);
+      headerFullUrl = avatarFullUrl;
+      headerSmallUrl = avatarSmallUrl;
+    } else if (avatarImg.isNotEmpty) {
+      avatarFullUrl = _ensureFileEnding(avatarImg);
+      avatarSmallUrl = _toSmallUrl(avatarFullUrl, isCustom: false);
+      headerFullUrl = avatarFullUrl;
+      headerSmallUrl = avatarSmallUrl;
+    }
+
+    return UserAvatarInfo(
+      avatarSmallUrl: avatarSmallUrl,
+      avatarFullUrl: avatarFullUrl,
+      headerSmallUrl: headerSmallUrl,
+      headerFullUrl: headerFullUrl,
+      hasCustomIcon: hasUserIcon,
+    );
+  }
+
+  static String _toSmallUrl(String url, {required bool isCustom}) {
+    return cache.ImageCache.toSmallUrl(url, isCustom: isCustom);
+  }
+
+  static String _ensureFileEnding(String url) {
+    var normalized = url.trim();
+    if (normalized.isEmpty) return normalized;
+
+    while (normalized.endsWith('/')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+
+    if (normalized.contains('/image/') &&
+        !normalized.endsWith('/file') &&
+        !normalized.endsWith('/256')) {
+      return '$normalized/file';
+    }
+    return normalized;
+  }
 }
 
 class UserStore extends ChangeNotifier {
@@ -20,6 +103,8 @@ class UserStore extends ChangeNotifier {
   final Set<String> _allFriendIds = <String>{};
   final Set<String> _onlineFriendIds = <String>{};
   final Map<String, User> _users = <String, User>{};
+  final Map<String, UserAvatarInfo> _avatarInfoByUserId =
+      <String, UserAvatarInfo>{};
   final Map<String, LimitedUserFriend> _limitedUsers =
       <String, LimitedUserFriend>{};
   final Map<String, List<MutualFriend>> _mutualFriends =
@@ -168,7 +253,7 @@ class UserStore extends ChangeNotifier {
       final user = success?.data;
       if (user == null) return null;
 
-      _users[userId] = user;
+      _setUser(user);
       _allFriendIds.add(userId);
       if (notify) notifyListeners();
       return user;
@@ -269,13 +354,13 @@ class UserStore extends ChangeNotifier {
         final e = event as FriendOnlineEvent;
         _allFriendIds.add(e.user.id);
         _onlineFriendIds.add(e.user.id);
-        _users[e.user.id] = e.user;
+        _setUser(e.user);
         break;
       case VrcStreamingEventType.friendLocation:
         final e = event as FriendLocationEvent;
         _allFriendIds.add(e.user.id);
         _onlineFriendIds.add(e.user.id);
-        _users[e.user.id] = e.user;
+        _setUser(e.user);
         break;
       case VrcStreamingEventType.friendOffline:
         final e = event as FriendOfflineEvent;
@@ -285,7 +370,7 @@ class UserStore extends ChangeNotifier {
       case VrcStreamingEventType.friendAdd:
         final e = event as FriendAddEvent;
         _allFriendIds.add(e.user.id);
-        _users[e.user.id] = e.user;
+        _setUser(e.user);
         if (e.user.status != UserStatus.offline) {
           _onlineFriendIds.add(e.user.id);
         }
@@ -296,6 +381,7 @@ class UserStore extends ChangeNotifier {
         _onlineFriendIds.remove(e.userId);
         _limitedUsers.remove(e.userId);
         _users.remove(e.userId);
+        _avatarInfoByUserId.remove(e.userId);
         _mutualFriends.remove(e.userId);
         _friendStatuses.remove(e.userId);
         break;
@@ -303,11 +389,11 @@ class UserStore extends ChangeNotifier {
         final e = event as FriendActiveEvent;
         _allFriendIds.add(e.user.id);
         _onlineFriendIds.add(e.user.id);
-        _users[e.user.id] = e.user;
+        _setUser(e.user);
         break;
       case VrcStreamingEventType.friendUpdate:
         final e = event as FriendUpdateEvent;
-        _users[e.user.id] = e.user;
+        _setUser(e.user);
         if (!_onlineFriendIds.contains(e.user.id) &&
             e.user.status != UserStatus.offline) {
           _onlineFriendIds.add(e.user.id);
@@ -348,6 +434,13 @@ class UserStore extends ChangeNotifier {
   }
 
   User? getUser(String userId) => _users[userId];
+
+  UserAvatarInfo? getAvatarInfo(String userId) => _avatarInfoByUserId[userId];
+
+  void _setUser(User user) {
+    _users[user.id] = user;
+    _avatarInfoByUserId[user.id] = UserAvatarInfo.fromUser(user);
+  }
 
   LimitedUserFriend? getLimitedUser(String userId) => _limitedUsers[userId];
 
@@ -419,6 +512,7 @@ class UserStore extends ChangeNotifier {
     _allFriendIds.clear();
     _onlineFriendIds.clear();
     _users.clear();
+    _avatarInfoByUserId.clear();
     _limitedUsers.clear();
     _mutualFriends.clear();
     _friendStatuses.clear();

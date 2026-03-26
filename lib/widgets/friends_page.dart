@@ -4,7 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
-import 'package:vrc_monitor/services/cache_manager.dart';
+import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/friend_search_page.dart';
@@ -21,7 +21,7 @@ class FriendsPage extends StatefulWidget {
 }
 
 class _FriendsPageState extends State<FriendsPage> {
-  final CacheManager _cacheManager = CacheManager.instance;
+  final cache.CacheManager _cacheManager = cache.CacheManager.instance;
   final UserStore _userStore = UserStore.instance;
 
   final Map<String, String> _worldNameById = {};
@@ -180,7 +180,7 @@ class _FriendsPageState extends State<FriendsPage> {
 
     for (final friend in onlineFriends) {
       final location = friend.location?.trim() ?? '';
-      final parsed = CacheManager.parseLocation(location);
+      final parsed = cache.CacheManager.parseLocation(location);
       final worldId = parsed?.worldId;
       if (worldId != null && !_worldNameById.containsKey(worldId)) {
         worldIds.add(worldId);
@@ -236,7 +236,7 @@ class _FriendsPageState extends State<FriendsPage> {
     var instanceChanged = false;
     for (final (raw, success) in instanceResults) {
       if (success != null) {
-        _instanceTypeByLocation[raw] = CacheManager.instanceTypeLabel(
+        _instanceTypeByLocation[raw] = cache.CacheManager.instanceTypeLabel(
           success.data.type,
           canRequestInvite: success.data.canRequestInvite ?? false,
         );
@@ -306,7 +306,7 @@ class _FriendsPageState extends State<FriendsPage> {
     if (lower.contains('private')) return '在私人房间';
     if (lower == 'offline') return '离线';
 
-    final parsed = CacheManager.parseLocation(location);
+    final parsed = cache.CacheManager.parseLocation(location);
     if (parsed == null) return location;
 
     final worldName = _worldNameById[parsed.worldId];
@@ -320,17 +320,8 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   String? _pickAvatarUrl(User user) {
-    final candidates = [
-      user.profilePicOverrideThumbnail,
-      user.profilePicOverride,
-      user.currentAvatarThumbnailImageUrl,
-      user.userIcon,
-      user.currentAvatarImageUrl,
-    ];
-    for (final url in candidates) {
-      if (url != null && url.isNotEmpty) return url;
-    }
-    return null;
+    final avatarInfo = _userStore.getAvatarInfo(user.id);
+    return avatarInfo?.avatarSmallUrl;
   }
 
   @override
@@ -790,16 +781,28 @@ class _LimitedUserRow extends StatelessWidget {
   }
 
   String? _pickAvatarUrl(LimitedUserFriend friend) {
-    final candidates = [
-      friend.profilePicOverrideThumbnail,
-      friend.profilePicOverride,
-      friend.currentAvatarThumbnailImageUrl,
-      friend.userIcon,
-      friend.currentAvatarImageUrl,
-    ];
-    for (final url in candidates) {
-      if (url != null && url.isNotEmpty) return url;
+    final userIcon = friend.userIcon;
+    if (userIcon != null && userIcon.trim().isNotEmpty) {
+      return userIcon;
     }
+
+    final profilePic = friend.profilePicOverride?.trim() ?? '';
+    final avatarImg = friend.currentAvatarImageUrl?.trim() ?? '';
+
+    if (profilePic.isNotEmpty) {
+      return cache.ImageCache.toSmallUrl(profilePic, isCustom: true);
+    }
+
+    if (avatarImg.isNotEmpty) {
+      var fullUrl = avatarImg;
+      if (fullUrl.contains('/image/') &&
+          !fullUrl.endsWith('/file') &&
+          !fullUrl.endsWith('/256')) {
+        fullUrl = '$fullUrl/file';
+      }
+      return cache.ImageCache.toSmallUrl(fullUrl, isCustom: false);
+    }
+
     return null;
   }
 }

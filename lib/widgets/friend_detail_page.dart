@@ -76,35 +76,44 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       );
 
       final dio = FriendDetailPage._fallbackDio;
-      final avatarForCache = _pickFirstNonEmpty([
-        user?.currentAvatarImageUrl,
-        user?.currentAvatarThumbnailImageUrl,
-      ]);
-      final profileForCache = _pickFirstNonEmpty([
-        user?.profilePicOverride,
-        user?.profilePicOverrideThumbnail,
-        user?.currentAvatarImageUrl,
-      ]);
-      final avatarFileId = cache.ImageCache.extractFileIdFromUrl(
-        avatarForCache,
-      );
-      final profileFileId = cache.ImageCache.extractFileIdFromUrl(
-        profileForCache,
-      );
-      Future.wait([
-        if (avatarFileId != null)
-          imageCache.cacheByFileId(
-            dio: dio,
-            fileId: avatarFileId,
-            imageUrl: avatarForCache,
-          ),
-        if (profileFileId != null)
-          imageCache.cacheByFileId(
-            dio: dio,
-            fileId: profileFileId,
-            imageUrl: profileForCache,
-          ),
-      ]);
+
+      final avatarInfo = UserStore.instance.getAvatarInfo(widget.userId);
+      final cacheTasks = <Future<void>>[];
+
+      if (avatarInfo != null) {
+        final avatarSmall = avatarInfo.avatarSmallUrl;
+        final headerSmall = avatarInfo.headerSmallUrl;
+
+        if (avatarSmall != null && avatarSmall.isNotEmpty) {
+          final fileId = cache.ImageCache.extractFileIdFromUrl(avatarSmall);
+          if (fileId != null) {
+            cacheTasks.add(
+              imageCache.cacheByFileId(
+                dio: dio,
+                fileId: fileId,
+                imageUrl: avatarSmall,
+              ),
+            );
+          }
+        }
+
+        if (headerSmall != null &&
+            headerSmall.isNotEmpty &&
+            headerSmall != avatarInfo.avatarSmallUrl) {
+          final fileId = cache.ImageCache.extractFileIdFromUrl(headerSmall);
+          if (fileId != null) {
+            cacheTasks.add(
+              imageCache.cacheByFileId(
+                dio: dio,
+                fileId: fileId,
+                imageUrl: headerSmall,
+              ),
+            );
+          }
+        }
+      }
+
+      await Future.wait(cacheTasks);
 
       return _DetailEnrichment(
         user: user,
@@ -497,15 +506,13 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         final enriched = snapshot.data;
         final enrichedUser = enriched?.user;
         final isDetailReady = snapshot.connectionState == ConnectionState.done;
-        final resolvedAvatarUrl = _pickFirstNonEmpty([
-          enrichedUser?.currentAvatarImageUrl,
-          enrichedUser?.currentAvatarThumbnailImageUrl,
-        ]);
-        final resolvedHeaderImageUrl = _pickFirstNonEmpty([
-          enrichedUser?.profilePicOverride,
-          enrichedUser?.profilePicOverrideThumbnail,
-          enrichedUser?.currentAvatarImageUrl,
-        ]);
+
+        final avatarInfo = UserStore.instance.getAvatarInfo(widget.userId);
+        final resolvedAvatarUrl = avatarInfo?.avatarSmallUrl;
+        final resolvedHeaderImageUrl = avatarInfo?.headerSmallUrl;
+        final avatarFullUrl = avatarInfo?.avatarFullUrl;
+        final headerFullUrl = avatarInfo?.headerFullUrl;
+
         final resolvedDisplayName = enrichedUser?.displayName ?? widget.userId;
         final nameColor = _trustColor(enrichedUser?.tags ?? const []);
 
@@ -515,6 +522,8 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
           displayName: resolvedDisplayName,
           avatarUrl: resolvedAvatarUrl,
           imageUrl: resolvedHeaderImageUrl,
+          avatarFullUrl: avatarFullUrl,
+          headerFullUrl: headerFullUrl,
           locationText: snapshot.data?.locationText,
           bio: enrichedUser?.bio,
           nameColor: nameColor,
@@ -574,16 +583,6 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     }
     return Colors.grey;
   }
-
-  String? _pickFirstNonEmpty(List<String?> values) {
-    for (final value in values) {
-      final normalized = value?.trim();
-      if (normalized != null && normalized.isNotEmpty) {
-        return normalized;
-      }
-    }
-    return null;
-  }
 }
 
 class _DetailEnrichment {
@@ -639,6 +638,8 @@ class _FriendDetailPageContent extends StatelessWidget {
     required this.displayName,
     this.avatarUrl,
     this.imageUrl,
+    this.avatarFullUrl,
+    this.headerFullUrl,
     this.locationText,
     this.bio,
     this.nameColor,
@@ -658,6 +659,8 @@ class _FriendDetailPageContent extends StatelessWidget {
   final String displayName;
   final String? avatarUrl;
   final String? imageUrl;
+  final String? avatarFullUrl;
+  final String? headerFullUrl;
   final String? locationText;
   final String? bio;
   final Color? nameColor;
@@ -707,10 +710,16 @@ class _FriendDetailPageContent extends StatelessWidget {
               status: status,
               statusDescription: statusDescription,
               pronouns: pronouns,
-              onAvatarTap: () =>
-                  _openImagePreview(context, imageUrl: avatarUrl, title: '头像'),
-              onHeaderTap: () =>
-                  _openImagePreview(context, imageUrl: imageUrl, title: '背景图'),
+              onAvatarTap: () => _openImagePreview(
+                context,
+                imageUrl: avatarFullUrl,
+                title: '头像',
+              ),
+              onHeaderTap: () => _openImagePreview(
+                context,
+                imageUrl: headerFullUrl,
+                title: '背景图',
+              ),
             ),
           ),
           SliverToBoxAdapter(
@@ -1358,10 +1367,27 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
   @override
   void initState() {
     super.initState();
-    _imageFuture = VrcNetworkImage.loadBytes(
-      dio: widget.dio,
-      imageUrl: widget.imageUrl,
-    );
+    _imageFuture = _loadFullImage(widget.imageUrl);
+  }
+
+  Future<Uint8List?> _loadFullImage(String url) async {
+    final imageCache = cache.CacheManager.instance.imageCache;
+    final fileId = cache.ImageCache.extractFileIdFromUrl(url);
+
+    if (fileId != null && fileId.isNotEmpty) {
+      final cached = await imageCache.getByFileId(fileId);
+      if (cached != null && cached.isNotEmpty) return cached;
+
+      await imageCache.cacheByFileId(
+        dio: widget.dio,
+        fileId: fileId,
+        imageUrl: url,
+      );
+      final fresh = await imageCache.getByFileId(fileId);
+      if (fresh != null && fresh.isNotEmpty) return fresh;
+    }
+
+    return VrcNetworkImage.loadBytes(dio: widget.dio, imageUrl: url);
   }
 
   @override
@@ -1411,10 +1437,7 @@ class _ImagePreviewPageState extends State<_ImagePreviewPage> {
     });
 
     try {
-      final bytes = await VrcNetworkImage.loadBytes(
-        dio: widget.dio,
-        imageUrl: widget.imageUrl,
-      );
+      final bytes = await _imageFuture;
       if (bytes == null || bytes.isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(

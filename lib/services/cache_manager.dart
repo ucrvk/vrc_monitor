@@ -102,6 +102,50 @@ class ImageCache {
     return match?.group(0);
   }
 
+  static String toSmallUrl(String fullUrl, {bool isCustom = true}) {
+    var normalized = fullUrl.trim();
+    if (normalized.isEmpty) return normalized;
+
+    while (normalized.endsWith('/')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+
+    if (isCustom) {
+      if (normalized.contains('/file/')) {
+        return '${normalized.replaceFirst('/file/', '/image/')}/512';
+      }
+      return normalized;
+    } else {
+      if (normalized.contains('/image/') && normalized.endsWith('/file')) {
+        return '${normalized.substring(0, normalized.length - 4)}/256';
+      }
+      return normalized;
+    }
+  }
+
+  static String toFullUrl(String? url, {bool isCustom = true}) {
+    var normalized = url?.trim() ?? '';
+    if (normalized.isEmpty) return normalized;
+
+    while (normalized.endsWith('/')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+
+    if (isCustom) {
+      if (normalized.contains('/image/') && normalized.endsWith('/512')) {
+        return normalized
+            .substring(0, normalized.length - 4)
+            .replaceFirst('/image/', '/file/');
+      }
+      return normalized;
+    } else {
+      if (normalized.contains('/image/') && normalized.endsWith('/256')) {
+        return '${normalized.substring(0, normalized.length - 3)}/file';
+      }
+      return normalized;
+    }
+  }
+
   Future<void> initialize() async {
     if (_cacheDir != null) return;
     final tempDir = await getTemporaryDirectory();
