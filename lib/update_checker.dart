@@ -16,7 +16,6 @@ class AppUpdateInfo {
 }
 
 class AppUpdateChecker {
-  static const String _betaBranch = 'beta';
   static const String _ignoredVersionKey = 'ignored_update_version';
 
   Future<AppUpdateInfo?> checkForUpdate() async {
@@ -24,7 +23,7 @@ class AppUpdateChecker {
       final packageInfo = await PackageInfo.fromPlatform();
       final localVersion = packageInfo.version.trim();
       final config = await AppConfigLoader.load();
-      final targetBranch = _isBetaVersion(localVersion) ? _betaBranch : config.branch;
+      final targetBranch = config.branch;
 
       final response = await WebClient.getPublic(
         config.versionJsonRawUriForBranch(targetBranch).toString(),
@@ -84,11 +83,6 @@ class AppUpdateChecker {
     required String local,
   }) {
     return _compareSemVer(remote, local) > 0;
-  }
-
-  bool _isBetaVersion(String version) {
-    final lower = version.toLowerCase();
-    return lower.contains('-beta') || lower.contains('.beta');
   }
 
   int _compareSemVer(String a, String b) {
