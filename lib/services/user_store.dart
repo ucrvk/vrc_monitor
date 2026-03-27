@@ -152,6 +152,7 @@ class UserStore extends ChangeNotifier {
   final Map<String, String> _avatarFileIdByUserId = <String, String>{};
   final Map<String, String> _headerFileIdByUserId = <String, String>{};
   final Map<String, String> _locationByUserId = <String, String>{};
+  final Map<String, String> _eventWorldNameByUserId = <String, String>{};
   final Map<String, LimitedUserFriend> _limitedUsers =
       <String, LimitedUserFriend>{};
   final Map<String, List<MutualFriend>> _mutualFriends =
@@ -543,6 +544,7 @@ class UserStore extends ChangeNotifier {
         if (e.location != null && e.location!.isNotEmpty) {
           _locationByUserId[e.user.id] = e.location!;
         }
+        _setEventWorldName(e.user.id, e.world?.name);
         _cacheWorldFromEvent(world: e.world, location: e.location);
         _setUser(e.user);
         break;
@@ -553,6 +555,7 @@ class UserStore extends ChangeNotifier {
         if (e.location != null && e.location!.isNotEmpty) {
           _locationByUserId[e.user.id] = e.location!;
         }
+        _setEventWorldName(e.user.id, e.world?.name);
         _cacheWorldFromEvent(world: e.world, location: e.location);
         _setUser(e.user);
         break;
@@ -561,6 +564,7 @@ class UserStore extends ChangeNotifier {
         _allFriendIds.add(e.userId);
         _onlineFriendIds.remove(e.userId);
         _locationByUserId.remove(e.userId);
+        _eventWorldNameByUserId.remove(e.userId);
         break;
       case VrcStreamingEventType.friendAdd:
         final e = event as FriendAddEvent;
@@ -579,6 +583,7 @@ class UserStore extends ChangeNotifier {
         _avatarFileIdByUserId.remove(e.userId);
         _headerFileIdByUserId.remove(e.userId);
         _locationByUserId.remove(e.userId);
+        _eventWorldNameByUserId.remove(e.userId);
         _mutualFriends.remove(e.userId);
         _friendStatuses.remove(e.userId);
         break;
@@ -652,6 +657,8 @@ class UserStore extends ChangeNotifier {
 
   String? getEventLocation(String userId) => _locationByUserId[userId];
 
+  String? getEventWorldName(String userId) => _eventWorldNameByUserId[userId];
+
   Color trustColorForTags(List<String> tags) {
     final trustTags = tags.map((e) => e.toLowerCase()).toSet();
     if (trustTags.contains('system_trust_veteran')) {
@@ -708,6 +715,12 @@ class UserStore extends ChangeNotifier {
         worldName,
       ),
     );
+  }
+
+  void _setEventWorldName(String userId, String? worldName) {
+    final next = worldName?.trim() ?? '';
+    if (next.isEmpty) return;
+    _eventWorldNameByUserId[userId] = next;
   }
 
   static String? _extractAvatarFileId(User user) {
@@ -849,6 +862,7 @@ class UserStore extends ChangeNotifier {
     _avatarFileIdByUserId.clear();
     _headerFileIdByUserId.clear();
     _limitedUsers.clear();
+    _eventWorldNameByUserId.clear();
     _mutualFriends.clear();
     _friendStatuses.clear();
     _loadingUserById.clear();

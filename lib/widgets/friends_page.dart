@@ -320,6 +320,10 @@ class _FriendsPageState extends State<FriendsPage> {
   String _locationTextFor(User friend) {
     final eventLocation = _userStore.getEventLocation(friend.id);
     final eventWorldName = (() {
+      final byEventWorld = _userStore.getEventWorldName(friend.id)?.trim();
+      if (byEventWorld != null && byEventWorld.isNotEmpty) {
+        return byEventWorld;
+      }
       final travelingTo = friend.travelingToLocation?.trim() ?? '';
       final parsedTravelingTo = cache.CacheManager.parseLocation(travelingTo);
       final worldId = parsedTravelingTo?.worldId;
@@ -343,9 +347,9 @@ class _FriendsPageState extends State<FriendsPage> {
 
     if (LocationUtils.isTraveling(location)) {
       if (eventWorldName != null && eventWorldName.isNotEmpty) {
-        return '⟳ 正在前往 $eventWorldName';
+        return '正在前往 $eventWorldName';
       }
-      return '⟳ 正在前往...';
+      return '正在前往...';
     }
 
     final parsed = cache.CacheManager.parseLocation(location);
