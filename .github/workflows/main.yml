@@ -1,4 +1,4 @@
-name: Beta APK Release
+name: Beta APK Pre-release
 
 on:
     push:
@@ -17,6 +17,8 @@ jobs:
         steps:
             - name: Checkout
               uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
 
             - name: Setup Java
               uses: actions/setup-java@v4
@@ -55,30 +57,40 @@ jobs:
             - name: Create key.properties
               shell: bash
               run: |
-                cat > android/key.properties <<EOF
-                storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
-                keyPassword=${{ secrets.ANDROID_STORE_PASSWORD }}
-                keyAlias=${{ vars.ANDROID_KEY_ALIAS }}
-                storeFile=upload-keystore.jks
-                EOF
+                  cat > android/key.properties <<EOF
+                  storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
+                  keyPassword=${{ secrets.ANDROID_STORE_PASSWORD }}
+                  keyAlias=${{ vars.ANDROID_KEY_ALIAS }}
+                  storeFile=upload-keystore.jks
+                  EOF
 
             - name: Build signed APKs
               run: flutter build apk --release --split-per-abi
 
-            - name: Check release exists
-              id: check_release
-              env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Find previous beta tag
+              id: prev_tag
               shell: bash
               run: |
-                  if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-                    echo "exists=true" >> "$GITHUB_OUTPUT"
+                  git fetch --tags
+                  PREV_TAG=$(git tag --sort=-version:refname | grep '^v[0-9].*beta.*' | grep -vx "${{ steps.version.outputs.tag }}" | head -n 1 || true)
+                  echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+
+            - name: Create release notes
+              shell: bash
+              run: |
+                  if [ -n "${{ steps.prev_tag.outputs.prev_tag }}" ]; then
+                    cat > release_notes.md <<EOF
+                  Auto build from beta branch because version.json changed.
+
+                  Full Changelog: ${{ steps.prev_tag.outputs.prev_tag }}...${{ steps.version.outputs.tag }}
+                  EOF
                   else
-                    echo "exists=false" >> "$GITHUB_OUTPUT"
+                    cat > release_notes.md <<EOF
+                  Auto build from beta branch because version.json changed.
+                  EOF
                   fi
 
-            - name: Create GitHub Release
-              if: steps.check_release.outputs.exists == 'false'
+            - name: Create GitHub pre-release
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
@@ -88,15 +100,5 @@ jobs:
                     build/app/outputs/flutter-apk/app-x86_64-release.apk \
                     --target beta \
                     --title "${{ steps.version.outputs.tag }}" \
-                    --notes "Auto release from beta branch because version.json changed."
-
-            - name: Upload assets if release already exists
-              if: steps.check_release.outputs.exists == 'true'
-              env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              run: |
-                  gh release upload "${{ steps.version.outputs.tag }}" \
-                    build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
-                    build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-                    build/app/outputs/flutter-apk/app-x86_64-release.apk \
-                    --clobber
+                    --notes-file release_notes.md \
+                    --prerelease
