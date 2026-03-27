@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
 
 class FriendSearchUser {
@@ -102,20 +103,7 @@ class FriendSearchUser {
   }
 
   Color get trustColor {
-    final trustTags = tags.map((e) => e.toLowerCase()).toSet();
-    if (trustTags.contains('system_trust_veteran')) {
-      return const Color(0xFF8E44AD);
-    }
-    if (trustTags.contains('system_trust_trusted')) {
-      return const Color(0xFFFF9800);
-    }
-    if (trustTags.contains('system_trust_known')) {
-      return const Color(0xFF4CAF50);
-    }
-    if (trustTags.contains('system_trust_basic')) {
-      return const Color(0xFF64B5F6);
-    }
-    return Colors.grey;
+    return UserStore.instance.trustColorForTags(tags);
   }
 }
 

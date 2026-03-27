@@ -27,8 +27,9 @@ class _FriendsPageState extends State<FriendsPage> {
 
   final Map<String, String> _worldNameById = {};
   final Map<String, String> _instanceTypeByLocation = {};
+  final Set<String> _worldIdsInFlight = <String>{};
+  final Set<String> _instanceLocationsInFlight = <String>{};
   Timer? _refreshCooldownTimer;
-  StreamSubscription<VrcStreamingEvent>? _wsSubscription;
   int _refreshCooldownSeconds = 0;
   bool _onlineExpanded = true;
   bool _webExpanded = true;
@@ -40,7 +41,7 @@ class _FriendsPageState extends State<FriendsPage> {
   void initState() {
     super.initState();
     unawaited(_hydrateFromCache());
-    _startStreamingSync();
+    _userStore.addListener(_handleUserStoreChanged);
     _buildFavoriteGroupsFromStore();
   }
 
@@ -82,10 +83,7 @@ class _FriendsPageState extends State<FriendsPage> {
   @override
   void dispose() {
     _refreshCooldownTimer?.cancel();
-    _wsSubscription?.cancel();
-    debugPrint('[WS] Stopping connection...');
-    widget.api.streaming.stop();
-    debugPrint('[WS] Connection stopped');
+    _userStore.removeListener(_handleUserStoreChanged);
     super.dispose();
   }
 
@@ -101,6 +99,8 @@ class _FriendsPageState extends State<FriendsPage> {
         ..clear()
         ..addAll(_cacheManager.memoryCache.instanceTypeByLocation);
     });
+
+    unawaited(_resolveLocationsForOnlineFriends());
   }
 
   void _syncFavoriteGroupExpansionState(List<_FavoriteFriendGroupView> groups) {
@@ -156,28 +156,15 @@ class _FriendsPageState extends State<FriendsPage> {
     return status == 429 || status >= 500;
   }
 
-  void _startStreamingSync() {
-    debugPrint('[WS] Connecting to VRChat WebSocket...');
-    _wsSubscription = widget.api.streaming.vrcEventStream.listen(
-      (event) {
-        _userStore.handleWebSocketEvent(event);
-        _resolveLocationsForOnlineFriends();
-      },
-      onError: (Object error) {
-        debugPrint('[WS] Stream error: $error');
-      },
-      onDone: () {
-        debugPrint('[WS] Connection closed');
-      },
-    );
-    widget.api.streaming.start();
-    debugPrint('[WS] Connection started');
+  void _handleUserStoreChanged() {
+    unawaited(_resolveLocationsForOnlineFriends());
   }
 
   Future<void> _resolveLocationsForOnlineFriends() async {
     final onlineFriends = _userStore.getSortedOnlineFriends();
-    final Set<String> worldIds = {};
-    final List<(String, String, String)> worldInstances = [];
+    final Set<String> worldIdsToFetch = <String>{};
+    final List<(String, String, String)> worldInstancesToFetch = [];
+    var anyImmediateUiChange = false;
 
     for (final friend in onlineFriends) {
       final location = friend.location?.trim() ?? '';
@@ -186,85 +173,123 @@ class _FriendsPageState extends State<FriendsPage> {
         final travelingTo = friend.travelingToLocation?.trim() ?? '';
         final parsed = cache.CacheManager.parseLocation(travelingTo);
         final worldId = parsed?.worldId;
-        if (worldId != null && !_worldNameById.containsKey(worldId)) {
-          worldIds.add(worldId);
+        if (worldId != null) {
+          final cached = _cacheManager.worldNameCache.worldName(worldId);
+          if (cached != null && cached.isNotEmpty) {
+            if (_worldNameById[worldId] != cached) {
+              _worldNameById[worldId] = cached;
+              anyImmediateUiChange = true;
+            }
+          } else if (!_worldNameById.containsKey(worldId) &&
+              !_worldIdsInFlight.contains(worldId)) {
+            worldIdsToFetch.add(worldId);
+            _worldIdsInFlight.add(worldId);
+          }
         }
         continue;
       }
 
       final parsed = cache.CacheManager.parseLocation(location);
       final worldId = parsed?.worldId;
-      if (worldId != null && !_worldNameById.containsKey(worldId)) {
-        worldIds.add(worldId);
+      if (worldId != null) {
+        final cached = _cacheManager.worldNameCache.worldName(worldId);
+        if (cached != null && cached.isNotEmpty) {
+          if (_worldNameById[worldId] != cached) {
+            _worldNameById[worldId] = cached;
+            anyImmediateUiChange = true;
+          }
+        } else if (!_worldNameById.containsKey(worldId)) {
+          if (!_worldIdsInFlight.contains(worldId)) {
+            worldIdsToFetch.add(worldId);
+            _worldIdsInFlight.add(worldId);
+          }
+        }
       }
       if (parsed != null &&
-          !_instanceTypeByLocation.containsKey(parsed.rawLocation)) {
-        worldInstances.add((
+          !_instanceTypeByLocation.containsKey(parsed.rawLocation) &&
+          !_instanceLocationsInFlight.contains(parsed.rawLocation)) {
+        worldInstancesToFetch.add((
           parsed.rawLocation,
           parsed.worldId,
           parsed.instanceId,
         ));
+        _instanceLocationsInFlight.add(parsed.rawLocation);
       }
     }
 
-    if (worldIds.isEmpty && worldInstances.isEmpty) return;
-
-    var changed = false;
-    final worldResults = await Future.wait([
-      for (final worldId in worldIds)
-        _runVrcRequest(
-          () => widget.api.rawApi
-              .getWorldsApi()
-              .getWorld(worldId: worldId)
-              .validateVrc(),
-        ).then((result) => (worldId, result.$1)),
-    ]);
-
-    if (!mounted) return;
-    for (final (worldId, success) in worldResults) {
-      if (success != null) {
-        _worldNameById[worldId] = success.data.name;
-      } else {
-        _worldNameById[worldId] = worldId;
-      }
-      changed = true;
+    if (anyImmediateUiChange && mounted) {
+      setState(() {});
     }
 
-    if (changed) {
-      await _cacheManager.worldNameCache.setWorldNameById(_worldNameById);
+    if (worldIdsToFetch.isEmpty && worldInstancesToFetch.isEmpty) return;
+
+    final tasks = <Future<void>>[];
+    var instanceCacheDirty = false;
+
+    for (final worldId in worldIdsToFetch) {
+      tasks.add(() async {
+        try {
+          final (success, _) = await _runVrcRequest(
+            () => widget.api.rawApi
+                .getWorldsApi()
+                .getWorld(worldId: worldId)
+                .validateVrc(),
+          );
+
+          final next = success?.data.name ?? worldId;
+          if (_worldNameById[worldId] != next) {
+            _worldNameById[worldId] = next;
+            if (mounted) {
+              setState(() {});
+            }
+          }
+          if (success != null && success.data.name.isNotEmpty) {
+            unawaited(
+              _cacheManager.worldNameCache.putWorldName(
+                worldId,
+                success.data.name,
+              ),
+            );
+          }
+        } finally {
+          _worldIdsInFlight.remove(worldId);
+        }
+      }());
     }
 
-    final instanceResults = await Future.wait([
-      for (final (raw, worldId, instanceId) in worldInstances)
-        _runVrcRequest(
-          () => widget.api.rawApi
-              .getWorldsApi()
-              .getWorldInstance(worldId: worldId, instanceId: instanceId)
-              .validateVrc(),
-        ).then((result) => (raw, result.$1)),
-    ]);
+    for (final (raw, worldId, instanceId) in worldInstancesToFetch) {
+      tasks.add(() async {
+        try {
+          final (success, _) = await _runVrcRequest(
+            () => widget.api.rawApi
+                .getWorldsApi()
+                .getWorldInstance(worldId: worldId, instanceId: instanceId)
+                .validateVrc(),
+          );
+          if (success == null) return;
 
-    if (!mounted) return;
-    var instanceChanged = false;
-    for (final (raw, success) in instanceResults) {
-      if (success != null) {
-        _instanceTypeByLocation[raw] = cache.CacheManager.instanceTypeLabel(
-          success.data.type,
-          canRequestInvite: success.data.canRequestInvite ?? false,
-        );
-        instanceChanged = true;
-      }
-      changed = true;
+          final typeLabel = cache.CacheManager.instanceTypeLabel(
+            success.data.type,
+            canRequestInvite: success.data.canRequestInvite ?? false,
+          );
+          if (_instanceTypeByLocation[raw] != typeLabel) {
+            _instanceTypeByLocation[raw] = typeLabel;
+            instanceCacheDirty = true;
+            if (mounted) {
+              setState(() {});
+            }
+          }
+        } finally {
+          _instanceLocationsInFlight.remove(raw);
+        }
+      }());
     }
 
-    if (instanceChanged) {
+    await Future.wait(tasks);
+    if (instanceCacheDirty) {
       _cacheManager.memoryCache.setInstanceTypeByLocation(
         _instanceTypeByLocation,
       );
-    }
-
-    if (changed && mounted) {
-      setState(() {});
     }
   }
 
@@ -292,26 +317,22 @@ class _FriendsPageState extends State<FriendsPage> {
     return _favoriteFriendGroups.length + 1;
   }
 
-  Color _trustColor(List<String> tags) {
-    final trustTags = tags.map((e) => e.toLowerCase()).toSet();
-    if (trustTags.contains('system_trust_veteran')) {
-      return const Color(0xFF8E44AD);
-    }
-    if (trustTags.contains('system_trust_trusted')) {
-      return const Color(0xFFFF9800);
-    }
-    if (trustTags.contains('system_trust_known')) {
-      return const Color(0xFF4CAF50);
-    }
-    if (trustTags.contains('system_trust_basic')) {
-      return const Color(0xFF64B5F6);
-    }
-    return Colors.grey;
-  }
-
   String _locationTextFor(User friend) {
     final eventLocation = _userStore.getEventLocation(friend.id);
-    final eventWorldName = _userStore.getEventWorldName(friend.id);
+    final eventWorldName = (() {
+      final travelingTo = friend.travelingToLocation?.trim() ?? '';
+      final parsedTravelingTo = cache.CacheManager.parseLocation(travelingTo);
+      final worldId = parsedTravelingTo?.worldId;
+      if (worldId == null) return null;
+
+      final worldName =
+          _worldNameById[worldId] ??
+          _cacheManager.worldNameCache.worldName(worldId);
+      if (worldName != null && worldName.isNotEmpty) {
+        _worldNameById[worldId] = worldName;
+      }
+      return worldName;
+    })();
     final location = (eventLocation ?? friend.location)?.trim() ?? '';
     final lower = location.toLowerCase();
     if (friend.status != UserStatus.offline && lower == 'offline') {
@@ -346,6 +367,12 @@ class _FriendsPageState extends State<FriendsPage> {
       return '$regionEmoji $locationWithLabel';
     }
     return locationWithLabel;
+  }
+
+  bool _isTravelingFor(User friend) {
+    final eventLocation = _userStore.getEventLocation(friend.id);
+    final location = (eventLocation ?? friend.location)?.trim() ?? '';
+    return LocationUtils.isTraveling(location);
   }
 
   String? _pickAvatarUrl(User user) {
@@ -551,9 +578,10 @@ class _FriendsPageState extends State<FriendsPage> {
           user: friends[i],
           dio: widget.api.rawApi.dio,
           locationText: _locationTextFor(friends[i]),
+          isTraveling: _isTravelingFor(friends[i]),
           avatarUrl: _pickAvatarUrl(friends[i]),
           avatarFileId: _userStore.getAvatarFileId(friends[i].id),
-          trustColor: _trustColor(friends[i].tags),
+          trustColor: _userStore.trustColorForTags(friends[i].tags),
           onTap: () => _openFriendDetailPage(friends[i].id),
         ),
         if (i != friends.length - 1) const Divider(height: 1),
@@ -576,7 +604,7 @@ class _FriendsPageState extends State<FriendsPage> {
         _LimitedUserRow(
           friend: friends[i],
           dio: widget.api.rawApi.dio,
-          trustColor: _trustColor(friends[i].tags),
+          trustColor: _userStore.trustColorForTags(friends[i].tags),
           onTap: () => _openFriendDetailPage(friends[i].id),
         ),
         if (i != friends.length - 1) const Divider(height: 1),
@@ -719,6 +747,7 @@ class _UserRow extends StatelessWidget {
     required this.user,
     required this.dio,
     required this.locationText,
+    required this.isTraveling,
     required this.avatarUrl,
     required this.avatarFileId,
     required this.trustColor,
@@ -728,6 +757,7 @@ class _UserRow extends StatelessWidget {
   final User user;
   final Dio dio;
   final String locationText;
+  final bool isTraveling;
   final String? avatarUrl;
   final String? avatarFileId;
   final Color trustColor;
@@ -753,7 +783,25 @@ class _UserRow extends StatelessWidget {
       ),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 4),
-        child: Text(locationText),
+        child: isTraveling
+            ? Row(
+                children: [
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      locationText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              )
+            : Text(locationText),
       ),
     );
   }

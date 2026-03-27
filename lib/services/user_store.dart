@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show Color;
 
 import 'package:flutter/foundation.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
@@ -10,6 +11,8 @@ class FavoriteGroupData {
   final String name;
   final String displayName;
 }
+
+enum WsConnectionStatus { connected, connecting, disconnected }
 
 class UserAvatarInfo {
   const UserAvatarInfo({
@@ -137,6 +140,11 @@ class UserStore extends ChangeNotifier {
   static final UserStore instance = UserStore._();
 
   static const int _pageSize = 100;
+  static const Color _trustVeteranColor = Color(0xFFB18FFF);
+  static const Color _trustTrustedColor = Color(0xFFFF7B42);
+  static const Color _trustKnownColor = Color(0xFF2BCF5C);
+  static const Color _trustBasicColor = Color(0xFF1778FF);
+  static const Color _trustDefaultColor = Color(0xFFCCCCCC);
 
   final Set<String> _allFriendIds = <String>{};
   final Set<String> _onlineFriendIds = <String>{};
@@ -144,7 +152,6 @@ class UserStore extends ChangeNotifier {
   final Map<String, String> _avatarFileIdByUserId = <String, String>{};
   final Map<String, String> _headerFileIdByUserId = <String, String>{};
   final Map<String, String> _locationByUserId = <String, String>{};
-  final Map<String, String> _worldNameByUserId = <String, String>{};
   final Map<String, LimitedUserFriend> _limitedUsers =
       <String, LimitedUserFriend>{};
   final Map<String, List<MutualFriend>> _mutualFriends =
@@ -155,6 +162,14 @@ class UserStore extends ChangeNotifier {
       <String, Future<List<MutualFriend>?>>{};
   final Map<String, Future<FriendStatus?>> _loadingFriendStatusById =
       <String, Future<FriendStatus?>>{};
+  StreamSubscription<VrcStreamingEvent>? _wsSubscription;
+  VrchatDart? _streamingApiRef;
+  Timer? _reconnectTimer;
+  bool _wsRunning = false;
+  bool _wsConnecting = false;
+  bool _stopRequested = false;
+  int _reconnectAttempt = 0;
+  WsConnectionStatus _wsStatus = WsConnectionStatus.disconnected;
 
   List<FavoriteGroupData> _favoriteGroups = const [];
   Map<String, String> _userFavoriteGroup = {}; // userId -> groupName
@@ -178,6 +193,129 @@ class UserStore extends ChangeNotifier {
     await loadOfflineFriendIds(api);
     await loadFavoriteData(api);
     notifyListeners();
+  }
+
+  Future<void> startRealtimeSync(VrchatDart api) async {
+    _streamingApiRef = api;
+    _stopRequested = false;
+    if (_wsRunning || _wsConnecting) return;
+    _updateWsStatus(notify: true);
+    await _connectStreaming();
+  }
+
+  Future<void> ensureRealtimeSync(VrchatDart api) async {
+    _streamingApiRef = api;
+    if (_wsRunning || _wsConnecting) return;
+    await startRealtimeSync(api);
+  }
+
+  Future<void> stopRealtimeSync() async {
+    _stopRequested = true;
+    _reconnectAttempt = 0;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+
+    final sub = _wsSubscription;
+    _wsSubscription = null;
+    if (sub != null) {
+      await sub.cancel();
+    }
+
+    try {
+      _streamingApiRef?.streaming.stop();
+    } catch (_) {
+      // ignore
+    }
+    _wsRunning = false;
+    _wsConnecting = false;
+    _updateWsStatus(notify: true);
+  }
+
+  Future<void> _connectStreaming() async {
+    final api = _streamingApiRef;
+    if (api == null || _stopRequested || _wsConnecting || _wsSubscription != null) {
+      return;
+    }
+
+    _wsConnecting = true;
+    _updateWsStatus(notify: true);
+    try {
+      debugPrint('[WS] Connecting to VRChat WebSocket...');
+      _wsSubscription = api.streaming.vrcEventStream.listen(
+        (event) {
+          _reconnectAttempt = 0;
+          handleWebSocketEvent(event);
+        },
+        onError: (Object error) {
+          debugPrint('[WS] Stream error: $error');
+          _handleStreamingDisconnected();
+        },
+        onDone: () {
+          debugPrint('[WS] Connection closed');
+          _handleStreamingDisconnected();
+        },
+      );
+
+      api.streaming.start();
+      _wsRunning = true;
+      _updateWsStatus(notify: true);
+      debugPrint('[WS] Connection started');
+    } catch (e) {
+      debugPrint('[WS] Connection start failed: $e');
+      _wsRunning = false;
+      final sub = _wsSubscription;
+      _wsSubscription = null;
+      await sub?.cancel();
+      _scheduleReconnect();
+    } finally {
+      _wsConnecting = false;
+      _updateWsStatus(notify: true);
+    }
+  }
+
+  void _handleStreamingDisconnected() {
+    _wsRunning = false;
+    final sub = _wsSubscription;
+    _wsSubscription = null;
+    unawaited(sub?.cancel());
+    _updateWsStatus(notify: true);
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_stopRequested || _reconnectTimer != null || _streamingApiRef == null) {
+      return;
+    }
+
+    const delays = <int>[1, 2, 5, 5, 10];
+    final index = _reconnectAttempt >= delays.length
+        ? delays.length - 1
+        : _reconnectAttempt;
+    final seconds = delays[index];
+    _reconnectAttempt += 1;
+
+    debugPrint('[WS] Reconnecting in ${seconds}s...');
+    _reconnectTimer = Timer(Duration(seconds: seconds), () {
+      _reconnectTimer = null;
+      _updateWsStatus(notify: true);
+      unawaited(_connectStreaming());
+    });
+    _updateWsStatus(notify: true);
+  }
+
+  WsConnectionStatus get wsConnectionStatus => _wsStatus;
+
+  void _updateWsStatus({required bool notify}) {
+    final next = _wsRunning
+        ? WsConnectionStatus.connected
+        : (_wsConnecting || _reconnectTimer != null)
+        ? WsConnectionStatus.connecting
+        : WsConnectionStatus.disconnected;
+    if (next == _wsStatus) return;
+    _wsStatus = next;
+    if (notify) {
+      notifyListeners();
+    }
   }
 
   Future<void> loadFavoriteData(VrchatDart api) async {
@@ -405,6 +543,7 @@ class UserStore extends ChangeNotifier {
         if (e.location != null && e.location!.isNotEmpty) {
           _locationByUserId[e.user.id] = e.location!;
         }
+        _cacheWorldFromEvent(world: e.world, location: e.location);
         _setUser(e.user);
         break;
       case VrcStreamingEventType.friendLocation:
@@ -413,11 +552,8 @@ class UserStore extends ChangeNotifier {
         _onlineFriendIds.add(e.user.id);
         if (e.location != null && e.location!.isNotEmpty) {
           _locationByUserId[e.user.id] = e.location!;
-          final world = e.world;
-          if (world != null && world.id.isNotEmpty) {
-            _worldNameByUserId[e.user.id] = world.name;
-          }
         }
+        _cacheWorldFromEvent(world: e.world, location: e.location);
         _setUser(e.user);
         break;
       case VrcStreamingEventType.friendOffline:
@@ -425,7 +561,6 @@ class UserStore extends ChangeNotifier {
         _allFriendIds.add(e.userId);
         _onlineFriendIds.remove(e.userId);
         _locationByUserId.remove(e.userId);
-        _worldNameByUserId.remove(e.userId);
         break;
       case VrcStreamingEventType.friendAdd:
         final e = event as FriendAddEvent;
@@ -444,7 +579,6 @@ class UserStore extends ChangeNotifier {
         _avatarFileIdByUserId.remove(e.userId);
         _headerFileIdByUserId.remove(e.userId);
         _locationByUserId.remove(e.userId);
-        _worldNameByUserId.remove(e.userId);
         _mutualFriends.remove(e.userId);
         _friendStatuses.remove(e.userId);
         break;
@@ -518,7 +652,22 @@ class UserStore extends ChangeNotifier {
 
   String? getEventLocation(String userId) => _locationByUserId[userId];
 
-  String? getEventWorldName(String userId) => _worldNameByUserId[userId];
+  Color trustColorForTags(List<String> tags) {
+    final trustTags = tags.map((e) => e.toLowerCase()).toSet();
+    if (trustTags.contains('system_trust_veteran')) {
+      return _trustVeteranColor;
+    }
+    if (trustTags.contains('system_trust_trusted')) {
+      return _trustTrustedColor;
+    }
+    if (trustTags.contains('system_trust_known')) {
+      return _trustKnownColor;
+    }
+    if (trustTags.contains('system_trust_basic')) {
+      return _trustBasicColor;
+    }
+    return _trustDefaultColor;
+  }
 
   void _setUser(User user) {
     _users[user.id] = user;
@@ -530,6 +679,35 @@ class UserStore extends ChangeNotifier {
     if (headerFileId != null) {
       _headerFileIdByUserId[user.id] = headerFileId;
     }
+  }
+
+  void _cacheWorldFromEvent({
+    required World? world,
+    required String? location,
+  }) {
+    final worldName = world?.name.trim() ?? '';
+    if (worldName.isEmpty) return;
+
+    var worldId = world?.id.trim() ?? '';
+    if (worldId.isEmpty) {
+      final parsed = cache.CacheManager.parseLocation(location);
+      if (parsed != null) {
+        worldId = parsed.worldId;
+      }
+    }
+    if (worldId.isEmpty) return;
+
+    final cachedName =
+        cache.CacheManager.instance.worldNameCache.worldName(worldId)?.trim() ??
+        '';
+    if (cachedName == worldName) return;
+
+    unawaited(
+      cache.CacheManager.instance.worldNameCache.putWorldName(
+        worldId,
+        worldName,
+      ),
+    );
   }
 
   static String? _extractAvatarFileId(User user) {

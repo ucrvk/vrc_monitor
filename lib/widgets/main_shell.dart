@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/widgets/friends_page.dart';
 import 'package:vrc_monitor/widgets/me_page.dart';
 
@@ -21,17 +24,18 @@ class _MainShellState extends State<MainShell> {
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _currentTabIndex);
+    unawaited(UserStore.instance.ensureRealtimeSync(widget.api));
   }
 
   @override
   void dispose() {
     _pageController.dispose();
-    widget.api.streaming.stop();
+    unawaited(UserStore.instance.stopRealtimeSync());
     super.dispose();
   }
 
   void _handleLogout() {
-    widget.api.streaming.stop();
+    unawaited(UserStore.instance.stopRealtimeSync());
   }
 
   @override

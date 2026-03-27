@@ -66,11 +66,10 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       final isFriend = friendStatus?.isFriend ?? false;
 
       final eventLocation = userStore.getEventLocation(widget.userId);
-      final eventWorldName = userStore.getEventWorldName(widget.userId);
       final locationText = await _resolveLocationText(
         status: user?.status ?? UserStatus.offline,
         eventLocation: eventLocation ?? user?.location,
-        eventWorldName: eventWorldName,
+        travelingToLocation: user?.travelingToLocation,
         api: api,
       );
 
@@ -144,7 +143,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
   Future<String?> _resolveLocationText({
     required UserStatus status,
     required String? eventLocation,
-    String? eventWorldName,
+    String? travelingToLocation,
     required VrchatDartGenerated? api,
   }) async {
     if (status == UserStatus.offline) return null;
@@ -155,6 +154,16 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
 
     if (lower == 'offline') return '在网页或其他端登录';
     if (lower.contains('private')) return '在私人房间';
+
+    final eventWorldName = (() {
+      final parsedTravelingTo = _parseLocation(travelingToLocation?.trim() ?? '');
+      final worldId = parsedTravelingTo?.worldId;
+      if (worldId == null) return null;
+      final worldName =
+          cache.CacheManager.instance.worldNameCache.worldName(worldId);
+      if (worldName == null || worldName.trim().isEmpty) return null;
+      return worldName.trim();
+    })();
 
     if (LocationUtils.isTraveling(location)) {
       if (eventWorldName != null && eventWorldName.isNotEmpty) {
@@ -545,7 +554,9 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
             .trim();
 
         final resolvedDisplayName = enrichedUser?.displayName ?? widget.userId;
-        final nameColor = _trustColor(enrichedUser?.tags ?? const []);
+        final nameColor = UserStore.instance.trustColorForTags(
+          enrichedUser?.tags ?? const [],
+        );
 
         return _FriendDetailPageContent(
           userId: widget.userId,
@@ -605,22 +616,6 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     );
   }
 
-  Color _trustColor(List<String> tags) {
-    final trustTags = tags.map((e) => e.toLowerCase()).toSet();
-    if (trustTags.contains('system_trust_veteran')) {
-      return const Color(0xFF8E44AD);
-    }
-    if (trustTags.contains('system_trust_trusted')) {
-      return const Color(0xFFFF9800);
-    }
-    if (trustTags.contains('system_trust_known')) {
-      return const Color(0xFF4CAF50);
-    }
-    if (trustTags.contains('system_trust_basic')) {
-      return const Color(0xFF64B5F6);
-    }
-    return Colors.grey;
-  }
 }
 
 class _DetailEnrichment {
@@ -974,11 +969,16 @@ class _FriendDetailPageContent extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                VrcAvatar(
-                  dio: dio,
-                  imageUrl: _mutualFriendAvatarUrl(friend),
-                  fileId: _mutualFriendAvatarFileId(friend),
-                  size: 44,
+                Builder(
+                  builder: (_) {
+                    final avatar = _resolveMutualFriendAvatar(friend);
+                    return VrcAvatar(
+                      dio: dio,
+                      imageUrl: avatar.imageUrl,
+                      fileId: avatar.fileId,
+                      size: 44,
+                    );
+                  },
                 ),
                 const SizedBox(height: 6),
                 Expanded(
@@ -997,10 +997,44 @@ class _FriendDetailPageContent extends StatelessWidget {
     );
   }
 
-  String? _mutualFriendAvatarUrl(MutualFriend friend) {
+  ({String? imageUrl, String? fileId}) _resolveMutualFriendAvatar(
+    MutualFriend friend,
+  ) {
+    final storeInfo = UserStore.instance.getAvatarInfo(friend.id);
+    final storeUrl = storeInfo?.avatarSmallUrl;
+    final storeFileId = UserStore.instance.getAvatarFileId(friend.id);
+    if (storeUrl != null && storeUrl.trim().isNotEmpty) {
+      return (imageUrl: storeUrl.trim(), fileId: storeFileId);
+    }
+
     final profilePic = friend.profilePicOverride?.trim() ?? '';
     if (profilePic.isNotEmpty) {
-      return cache.ImageCache.toSmallUrl(profilePic, isCustom: true);
+      final imageUrl = cache.ImageCache.toSmallUrl(profilePic, isCustom: true);
+      return (
+        imageUrl: imageUrl,
+        fileId: cache.ImageCache.extractFileIdFromUrl(imageUrl),
+      );
+    }
+
+    final avatarThumb = friend.currentAvatarThumbnailImageUrl?.trim() ?? '';
+    if (avatarThumb.isNotEmpty) {
+      final imageUrl = cache.ImageCache.toSmallUrl(avatarThumb, isCustom: false);
+      return (
+        imageUrl: imageUrl,
+        fileId: cache.ImageCache.extractFileIdFromUrl(imageUrl),
+      );
+    }
+
+    final fallbackThumb = friend.avatarThumbnail?.trim() ?? '';
+    if (fallbackThumb.isNotEmpty) {
+      final imageUrl = cache.ImageCache.toSmallUrl(
+        fallbackThumb,
+        isCustom: false,
+      );
+      return (
+        imageUrl: imageUrl,
+        fileId: cache.ImageCache.extractFileIdFromUrl(imageUrl),
+      );
     }
 
     final avatarImg = friend.currentAvatarImageUrl.trim();
@@ -1011,24 +1045,22 @@ class _FriendDetailPageContent extends StatelessWidget {
           !fullUrl.endsWith('/256')) {
         fullUrl = '$fullUrl/file';
       }
-      return cache.ImageCache.toSmallUrl(fullUrl, isCustom: false);
+      final imageUrl = cache.ImageCache.toSmallUrl(fullUrl, isCustom: false);
+      return (
+        imageUrl: imageUrl,
+        fileId: cache.ImageCache.extractFileIdFromUrl(imageUrl),
+      );
     }
 
-    return null;
-  }
-
-  String? _mutualFriendAvatarFileId(MutualFriend friend) {
-    final profilePic = friend.profilePicOverride?.trim() ?? '';
-    if (profilePic.isNotEmpty) {
-      return cache.ImageCache.extractFileIdFromUrl(profilePic);
+    final imageUrl = friend.imageUrl.trim();
+    if (imageUrl.isNotEmpty) {
+      return (
+        imageUrl: imageUrl,
+        fileId: cache.ImageCache.extractFileIdFromUrl(imageUrl),
+      );
     }
 
-    final avatarImg = friend.currentAvatarImageUrl.trim();
-    if (avatarImg.isNotEmpty) {
-      return cache.ImageCache.extractFileIdFromUrl(avatarImg);
-    }
-
-    return null;
+    return (imageUrl: null, fileId: null);
   }
 
   List<MutualFriend> get _visibleMutualFriends {

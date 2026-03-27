@@ -118,6 +118,7 @@ class _LoginPageState extends State<LoginPage> {
 
       await CacheManager.instance.initialize(api: api, currentUser: user);
       await UserStore.instance.initialize(api);
+      await UserStore.instance.startRealtimeSync(api);
 
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(

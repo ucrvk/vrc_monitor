@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/widgets/login_page.dart';
 import 'package:vrc_monitor/widgets/settings_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
@@ -40,6 +41,40 @@ class _MePageState extends State<MePage> {
       appBar: AppBar(
         title: Text("我"),
         actions: [
+          AnimatedBuilder(
+            animation: UserStore.instance,
+            builder: (context, _) {
+              final status = UserStore.instance.wsConnectionStatus;
+              return Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: IconButton(
+                  tooltip: '服务器连接状态',
+                  onPressed: () {
+                    final text = switch (status) {
+                      WsConnectionStatus.connected => '服务器连接状态：连接',
+                      WsConnectionStatus.connecting => '服务器连接状态：正在连接',
+                      WsConnectionStatus.disconnected => '服务器连接状态：断开连接',
+                    };
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text(text)));
+                  },
+                  icon: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: switch (status) {
+                        WsConnectionStatus.connected => Colors.green,
+                        WsConnectionStatus.connecting => Colors.yellow,
+                        WsConnectionStatus.disconnected => Colors.red,
+                      },
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
           IconButton(
             onPressed: _logout,
             tooltip: '退出登录',
@@ -69,7 +104,9 @@ class _MePageState extends State<MePage> {
                           _currentUser.displayName,
                           style: Theme.of(context).textTheme.titleLarge
                               ?.copyWith(
-                                color: _trustColorForCurrentUser(_currentUser),
+                                color: UserStore.instance.trustColorForTags(
+                                  _currentUser.tags,
+                                ),
                               ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -382,23 +419,6 @@ class _MePageState extends State<MePage> {
     final desc = user.statusDescription.trim();
     if (desc.isEmpty) return label;
     return '$label · $desc';
-  }
-
-  Color _trustColorForCurrentUser(CurrentUser user) {
-    final trustTags = user.tags.map((e) => e.toLowerCase()).toSet();
-    if (trustTags.contains('system_trust_veteran')) {
-      return const Color(0xFF8E44AD);
-    }
-    if (trustTags.contains('system_trust_trusted')) {
-      return const Color(0xFFFF9800);
-    }
-    if (trustTags.contains('system_trust_known')) {
-      return const Color(0xFF4CAF50);
-    }
-    if (trustTags.contains('system_trust_basic')) {
-      return const Color(0xFF64B5F6);
-    }
-    return Colors.grey;
   }
 
   String? _currentUserAvatarUrl(CurrentUser user) {
