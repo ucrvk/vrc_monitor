@@ -47,7 +47,7 @@ jobs:
                   PY
                   )
                   echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-                  echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+                  echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
 
             - name: Decode keystore
               shell: bash
@@ -72,7 +72,7 @@ jobs:
               shell: bash
               run: |
                   git fetch --tags
-                  PREV_TAG=$(git tag --sort=-version:refname | grep '^v[0-9].*beta.*' | grep -vx "${{ steps.version.outputs.tag }}" | head -n 1 || true)
+                  PREV_TAG=$(git tag --sort=-version:refname | grep '^[0-9].*beta.*' | grep -vx "${{ steps.version.outputs.tag }}" | head -n 1 || true)
                   echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
 
             - name: Create release notes
