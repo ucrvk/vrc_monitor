@@ -55,12 +55,12 @@ jobs:
             - name: Create key.properties
               shell: bash
               run: |
-                  cat > android/key.properties <<EOF
-                  storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
-                  keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-                  keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-                  storeFile=app/upload-keystore.jks
-                  EOF
+                cat > android/key.properties <<EOF
+                storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
+                keyPassword=${{ secrets.ANDROID_STORE_PASSWORD }}
+                keyAlias=${{ vars.ANDROID_KEY_ALIAS }}
+                storeFile=upload-keystore.jks
+                EOF
 
             - name: Build signed APKs
               run: flutter build apk --release --split-per-abi
