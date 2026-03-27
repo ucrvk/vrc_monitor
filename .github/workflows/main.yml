@@ -107,11 +107,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
-            gh release create "${{ steps.version.outputs.tag }}" \
-              build/app/outputs/flutter-apk/vrc_monitor-armeabi-v7a-${{ steps.version.outputs.version }}.apk \
-              build/app/outputs/flutter-apk/vrc_monitor-arm64-v8a-${{ steps.version.outputs.version }}.apk \
-              build/app/outputs/flutter-apk/vrc_monitor-x86_64-${{ steps.version.outputs.version }}.apk \
-            --target beta \
-            --title "${{ steps.version.outputs.tag }}" \
-            --notes-file release_notes.md \
-            --prerelease
+            build/app/outputs/flutter-apk/vrc_monitor-armeabi-v7a-${{ steps.version.outputs.version }}.apk \
+            build/app/outputs/flutter-apk/vrc_monitor-arm64-v8a-${{ steps.version.outputs.version }}.apk \
+            build/app/outputs/flutter-apk/vrc_monitor-x86_64-${{ steps.version.outputs.version }}.apk \
+          --target beta \
+          --title "${{ steps.version.outputs.tag }}" \
+          --notes-file release_notes.md \
+          --prerelease

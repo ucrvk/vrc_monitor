@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/auth_manager.dart';
+import 'package:vrc_monitor/services/auth_vault.dart';
 import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/widgets/login_page.dart';
 import 'package:vrc_monitor/widgets/settings_page.dart';
@@ -396,6 +398,11 @@ class _MePageState extends State<MePage> {
   Future<void> _logout() async {
     widget.onLogout?.call();
     await widget.api.auth.logout();
+    await AuthManager.instance.clearSession(widget.api);
+    final rememberPassword = await AuthVault.instance.readRememberPassword();
+    if (!rememberPassword) {
+      await AuthVault.instance.clearPassword();
+    }
     if (!mounted) return;
     await Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(builder: (_) => const LoginPage()),

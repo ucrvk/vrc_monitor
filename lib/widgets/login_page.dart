@@ -1,8 +1,9 @@
 import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/auth_manager.dart';
+import 'package:vrc_monitor/services/auth_vault.dart';
 import 'package:vrc_monitor/services/cache_manager.dart';
 import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/widgets/main_shell.dart';
@@ -21,6 +22,7 @@ class _LoginPageState extends State<LoginPage> {
   VrchatDart? _api;
   bool _isInitializing = true;
   bool _isLoading = false;
+  bool _isAutoLoggingIn = false;
   bool _rememberPassword = false;
   String? _message;
 
@@ -39,11 +41,12 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _initApi() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      _rememberPassword = prefs.getBool('remember_password') ?? false;
-      _usernameController.text = prefs.getString('saved_username') ?? '';
+      _rememberPassword = await AuthVault.instance.readRememberPassword();
+      _usernameController.text = await AuthVault.instance.readUsername();
       if (_rememberPassword) {
-        _passwordController.text = prefs.getString('saved_password') ?? '';
+        _passwordController.text = await AuthVault.instance.readPassword();
+      } else {
+        _passwordController.clear();
       }
 
       final supportDir = await getApplicationSupportDirectory();
@@ -56,12 +59,31 @@ class _LoginPageState extends State<LoginPage> {
         ),
         cookiePath: cookieDir,
       );
+
+      if (mounted) {
+        setState(() {
+          _isAutoLoggingIn = true;
+          _message = '检测到会话，正在自动登录...';
+        });
+      }
+      final user = await AuthManager.instance.tryAutoLogin(_api!);
+      if (user != null) {
+        await _bootstrapAfterAuthenticated(_api!, user);
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _isAutoLoggingIn = false;
+          _message = null;
+        });
+      }
     } catch (e) {
       _setMessage('API 初始化失败: $e', isError: true);
     } finally {
       if (mounted) {
         setState(() {
           _isInitializing = false;
+          _isAutoLoggingIn = false;
         });
       }
     }
@@ -85,6 +107,7 @@ class _LoginPageState extends State<LoginPage> {
         username: _usernameController.text.trim(),
         password: _passwordController.text,
       );
+      ValidResponse<dynamic, AuthResponse>? twoFactorSuccess;
 
       if (loginSuccess == null) {
         _setMessage(_extractFailureText(loginFailure), isError: true);
@@ -105,6 +128,7 @@ class _LoginPageState extends State<LoginPage> {
           _setMessage(_extractFailureText(otpFailure), isError: true);
           return;
         }
+        twoFactorSuccess = otpSuccess;
       }
 
       final user = api.auth.currentUser;
@@ -114,18 +138,15 @@ class _LoginPageState extends State<LoginPage> {
       }
 
       await _persistCredentials();
+      await AuthManager.instance.captureSessionTokenFromResponses(
+        api,
+        primary: twoFactorSuccess,
+        secondary: loginSuccess,
+      );
+      await AuthManager.instance.captureSessionTokenFromCurrentSession(api);
       _setMessage('登录成功，正在预加载缓存...', isError: false);
 
-      await CacheManager.instance.initialize(api: api, currentUser: user);
-      await UserStore.instance.initialize(api);
-      await UserStore.instance.startRealtimeSync(api);
-
-      if (!mounted) return;
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => MainShell(api: api, currentUser: user),
-        ),
-      );
+      await _bootstrapAfterAuthenticated(api, user);
     } catch (e) {
       _setMessage('登录异常: $e', isError: true);
     } finally {
@@ -193,14 +214,29 @@ class _LoginPageState extends State<LoginPage> {
     return failure.error.toString();
   }
 
+  Future<void> _bootstrapAfterAuthenticated(
+    VrchatDart api,
+    CurrentUser user,
+  ) async {
+    await CacheManager.instance.initialize(api: api, currentUser: user);
+    await UserStore.instance.initialize(api);
+    await UserStore.instance.startRealtimeSync(api);
+
+    if (!mounted) return;
+    await Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => MainShell(api: api, currentUser: user),
+      ),
+    );
+  }
+
   Future<void> _persistCredentials() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('remember_password', _rememberPassword);
-    await prefs.setString('saved_username', _usernameController.text.trim());
+    await AuthVault.instance.writeRememberPassword(_rememberPassword);
+    await AuthVault.instance.writeUsername(_usernameController.text.trim());
     if (_rememberPassword) {
-      await prefs.setString('saved_password', _passwordController.text);
+      await AuthVault.instance.writePassword(_passwordController.text);
     } else {
-      await prefs.remove('saved_password');
+      await AuthVault.instance.clearPassword();
     }
   }
 
@@ -253,6 +289,20 @@ class _LoginPageState extends State<LoginPage> {
                         )
                       : Text(_isInitializing ? '初始化中...' : '登录'),
                 ),
+                if (_isAutoLoggingIn) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: const [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 8),
+                      Text('正在自动登录，请稍候...'),
+                    ],
+                  ),
+                ],
                 if (_message != null) ...[
                   const SizedBox(height: 16),
                   Text(
