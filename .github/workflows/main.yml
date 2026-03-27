@@ -1,0 +1,102 @@
+name: Beta APK Release
+
+on:
+    push:
+        branches:
+            - beta
+        paths:
+            - version.json
+
+permissions:
+    contents: write
+
+jobs:
+    build-and-release:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Java
+              uses: actions/setup-java@v4
+              with:
+                  distribution: temurin
+                  java-version: "17"
+
+            - name: Setup Flutter
+              uses: subosito/flutter-action@v2
+              with:
+                  channel: stable
+                  cache: true
+
+            - name: Install dependencies
+              run: flutter pub get
+
+            - name: Read version from version.json
+              id: version
+              shell: bash
+              run: |
+                  VERSION=$(python3 - <<'PY'
+                  import json
+                  with open("version.json", "r", encoding="utf-8") as f:
+                      data = json.load(f)
+                  print(data["version"])
+                  PY
+                  )
+                  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+                  echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+            - name: Decode keystore
+              shell: bash
+              run: |
+                  echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+
+            - name: Create key.properties
+              shell: bash
+              run: |
+                  cat > android/key.properties <<EOF
+                  storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
+                  keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+                  keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+                  storeFile=app/upload-keystore.jks
+                  EOF
+
+            - name: Build signed APKs
+              run: flutter build apk --release --split-per-abi
+
+            - name: Check release exists
+              id: check_release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              shell: bash
+              run: |
+                  if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+                    echo "exists=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "exists=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Create GitHub Release
+              if: steps.check_release.outputs.exists == 'false'
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  gh release create "${{ steps.version.outputs.tag }}" \
+                    build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
+                    build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+                    build/app/outputs/flutter-apk/app-x86_64-release.apk \
+                    --target beta \
+                    --title "${{ steps.version.outputs.tag }}" \
+                    --notes "Auto release from beta branch because version.json changed."
+
+            - name: Upload assets if release already exists
+              if: steps.check_release.outputs.exists == 'true'
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  gh release upload "${{ steps.version.outputs.tag }}" \
+                    build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
+                    build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+                    build/app/outputs/flutter-apk/app-x86_64-release.apk \
+                    --clobber
