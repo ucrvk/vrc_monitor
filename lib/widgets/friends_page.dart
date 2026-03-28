@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/utils/location_utils.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/friend_search_page.dart';
@@ -24,6 +25,7 @@ class FriendsPage extends StatefulWidget {
 class _FriendsPageState extends State<FriendsPage> {
   final cache.CacheManager _cacheManager = cache.CacheManager.instance;
   final UserStore _userStore = UserStore.instance;
+  final WorldStore _worldStore = WorldStore.instance;
 
   final Map<String, String> _worldNameById = {};
   final Map<String, String> _instanceTypeByLocation = {};
@@ -88,13 +90,13 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   Future<void> _hydrateFromCache() async {
-    await _cacheManager.worldNameCache.load();
+    await _worldStore.initialize();
     if (!mounted) return;
 
     setState(() {
       _worldNameById
         ..clear()
-        ..addAll(_cacheManager.worldNameCache.worldNameById);
+        ..addAll(_worldStore.worldNameById);
       _instanceTypeByLocation
         ..clear()
         ..addAll(_cacheManager.memoryCache.instanceTypeByLocation);
@@ -174,7 +176,7 @@ class _FriendsPageState extends State<FriendsPage> {
         final parsed = cache.CacheManager.parseLocation(travelingTo);
         final worldId = parsed?.worldId;
         if (worldId != null) {
-          final cached = _cacheManager.worldNameCache.worldName(worldId);
+          final cached = _worldStore.getWorldName(worldId);
           if (cached != null && cached.isNotEmpty) {
             if (_worldNameById[worldId] != cached) {
               _worldNameById[worldId] = cached;
@@ -192,7 +194,7 @@ class _FriendsPageState extends State<FriendsPage> {
       final parsed = cache.CacheManager.parseLocation(location);
       final worldId = parsed?.worldId;
       if (worldId != null) {
-        final cached = _cacheManager.worldNameCache.worldName(worldId);
+        final cached = _worldStore.getWorldName(worldId);
         if (cached != null && cached.isNotEmpty) {
           if (_worldNameById[worldId] != cached) {
             _worldNameById[worldId] = cached;
@@ -229,27 +231,18 @@ class _FriendsPageState extends State<FriendsPage> {
     for (final worldId in worldIdsToFetch) {
       tasks.add(() async {
         try {
-          final (success, _) = await _runVrcRequest(
-            () => widget.api.rawApi
-                .getWorldsApi()
-                .getWorld(worldId: worldId)
-                .validateVrc(),
+          final world = await _worldStore.getOrFetch(
+            worldId,
+            widget.api.rawApi,
           );
-
-          final next = success?.data.name ?? worldId;
+          final next = world?.name.trim().isNotEmpty == true
+              ? world!.name
+              : worldId;
           if (_worldNameById[worldId] != next) {
             _worldNameById[worldId] = next;
             if (mounted) {
               setState(() {});
             }
-          }
-          if (success != null && success.data.name.isNotEmpty) {
-            unawaited(
-              _cacheManager.worldNameCache.putWorldName(
-                worldId,
-                success.data.name,
-              ),
-            );
           }
         } finally {
           _worldIdsInFlight.remove(worldId);
@@ -330,8 +323,7 @@ class _FriendsPageState extends State<FriendsPage> {
       if (worldId == null) return null;
 
       final worldName =
-          _worldNameById[worldId] ??
-          _cacheManager.worldNameCache.worldName(worldId);
+          _worldStore.getWorldName(worldId) ?? _worldNameById[worldId];
       if (worldName != null && worldName.isNotEmpty) {
         _worldNameById[worldId] = worldName;
       }
@@ -355,7 +347,9 @@ class _FriendsPageState extends State<FriendsPage> {
     final parsed = cache.CacheManager.parseLocation(location);
     if (parsed == null) return location;
 
-    final worldName = _worldNameById[parsed.worldId];
+    final worldName =
+        _worldStore.getWorldName(parsed.worldId) ??
+        _worldNameById[parsed.worldId];
     final base = (worldName == null || worldName == parsed.worldId)
         ? location
         : worldName;

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
@@ -23,67 +22,6 @@ class MemoryDataCache {
   void putInstanceType(String location, String typeLabel) {
     if (location.isEmpty || typeLabel.isEmpty) return;
     _instanceTypeByLocation = {..._instanceTypeByLocation, location: typeLabel};
-  }
-}
-
-class WorldNameCache {
-  io.File? _cacheFile;
-  Map<String, String> _worldNameById = const {};
-
-  Map<String, String> get worldNameById => Map.unmodifiable(_worldNameById);
-
-  String? worldName(String worldId) => _worldNameById[worldId];
-
-  Future<void> initialize() async {
-    if (_cacheFile != null) return;
-    final tempDir = await getTemporaryDirectory();
-    _cacheFile = io.File('${tempDir.path}/vrc_world_names.json');
-    await load();
-  }
-
-  Future<void> load() async {
-    final file = _cacheFile;
-    if (file == null) return;
-
-    if (!await file.exists()) {
-      _worldNameById = const {};
-      return;
-    }
-
-    try {
-      final content = await file.readAsString();
-      if (content.isEmpty) {
-        _worldNameById = const {};
-        return;
-      }
-      final parsed = jsonDecode(content);
-      if (parsed is! Map) {
-        _worldNameById = const {};
-        return;
-      }
-      _worldNameById = parsed.map(
-        (k, v) => MapEntry(k.toString(), v.toString()),
-      );
-    } catch (_) {
-      _worldNameById = const {};
-    }
-  }
-
-  Future<void> save() async {
-    final file = _cacheFile;
-    if (file == null) return;
-    await file.writeAsString(jsonEncode(_worldNameById));
-  }
-
-  Future<void> putWorldName(String worldId, String name) async {
-    if (worldId.isEmpty || name.isEmpty) return;
-    _worldNameById = {..._worldNameById, worldId: name};
-    await save();
-  }
-
-  Future<void> setWorldNameById(Map<String, String> map) async {
-    _worldNameById = Map<String, String>.from(map);
-    await save();
   }
 }
 
@@ -228,6 +166,29 @@ class ImageCache {
     await initialize();
     return io.File('${_cacheDir!.path}/$fileId.img');
   }
+
+  Future<int> clearAll() async {
+    await initialize();
+    final dir = _cacheDir;
+    if (dir == null) return 0;
+
+    var deletedCount = 0;
+    if (await dir.exists()) {
+      await for (final entity in dir.list(recursive: false)) {
+        if (entity is io.File) {
+          try {
+            await entity.delete();
+            deletedCount += 1;
+          } catch (_) {
+            // ignore delete failure for individual files
+          }
+        }
+      }
+    }
+
+    _memoryCache.clear();
+    return deletedCount;
+  }
 }
 
 class CacheManager {
@@ -236,7 +197,6 @@ class CacheManager {
   static final CacheManager instance = CacheManager._();
 
   final MemoryDataCache memoryCache = MemoryDataCache();
-  final WorldNameCache worldNameCache = WorldNameCache();
   final ImageCache imageCache = ImageCache();
 
   Future<void>? _initializingFuture;
@@ -265,7 +225,6 @@ class CacheManager {
     required CurrentUser currentUser,
     required bool preload,
   }) async {
-    await worldNameCache.initialize();
     await imageCache.initialize();
   }
 

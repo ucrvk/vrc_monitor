@@ -4,6 +4,7 @@ import 'dart:ui' show Color;
 import 'package:flutter/foundation.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
+import 'package:vrc_monitor/services/world_store.dart';
 
 class FavoriteGroupData {
   const FavoriteGroupData({required this.name, required this.displayName});
@@ -234,7 +235,10 @@ class UserStore extends ChangeNotifier {
 
   Future<void> _connectStreaming() async {
     final api = _streamingApiRef;
-    if (api == null || _stopRequested || _wsConnecting || _wsSubscription != null) {
+    if (api == null ||
+        _stopRequested ||
+        _wsConnecting ||
+        _wsSubscription != null) {
       return;
     }
 
@@ -692,29 +696,9 @@ class UserStore extends ChangeNotifier {
     required World? world,
     required String? location,
   }) {
-    final worldName = world?.name.trim() ?? '';
-    if (worldName.isEmpty) return;
-
-    var worldId = world?.id.trim() ?? '';
-    if (worldId.isEmpty) {
-      final parsed = cache.CacheManager.parseLocation(location);
-      if (parsed != null) {
-        worldId = parsed.worldId;
-      }
-    }
-    if (worldId.isEmpty) return;
-
-    final cachedName =
-        cache.CacheManager.instance.worldNameCache.worldName(worldId)?.trim() ??
-        '';
-    if (cachedName == worldName) return;
-
-    unawaited(
-      cache.CacheManager.instance.worldNameCache.putWorldName(
-        worldId,
-        worldName,
-      ),
-    );
+    final _ = location; // reserved for future fallback parsing
+    if (world == null) return;
+    unawaited(WorldStore.instance.putWorld(world));
   }
 
   void _setEventWorldName(String userId, String? worldName) {

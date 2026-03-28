@@ -5,6 +5,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vrc_monitor/app_config.dart';
 import 'package:vrc_monitor/app_settings.dart';
+import 'package:vrc_monitor/services/cache_manager.dart';
+import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/update_checker.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -19,12 +21,16 @@ class _SettingsPageState extends State<SettingsPage> {
   String _branch = AppConfig.fallback.branch;
   String _appVersion = '读取中...';
   bool _checkingUpdate = false;
+  bool _clearingWorldStore = false;
+  bool _clearingImageCache = false;
+  int _storedWorldCount = 0;
 
   @override
   void initState() {
     super.initState();
     _loadBranch();
     _loadAppVersion();
+    _refreshWorldCount();
   }
 
   Future<void> _loadBranch() async {
@@ -41,9 +47,9 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {
       _branch = value;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('发行通道已切换到 $value')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('发布通道已切换到 $value')));
   }
 
   Future<void> _loadAppVersion() async {
@@ -61,6 +67,57 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _refreshWorldCount() async {
+    await WorldStore.instance.initialize();
+    if (!mounted) return;
+    setState(() {
+      _storedWorldCount = WorldStore.instance.storedWorldCount;
+    });
+  }
+
+  Future<void> _clearWorldStore() async {
+    if (_clearingWorldStore) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _clearingWorldStore = true;
+    });
+    try {
+      final removed = await WorldStore.instance.clearStorage();
+      if (!mounted) return;
+      await _refreshWorldCount();
+      messenger.showSnackBar(
+        SnackBar(content: Text('已清理 world 存储，共删除 $removed 条')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _clearingWorldStore = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _clearImageCache() async {
+    if (_clearingImageCache) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _clearingImageCache = true;
+    });
+    try {
+      final removed = await CacheManager.instance.imageCache.clearAll();
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('已清理图片缓存，删除 $removed 个文件')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _clearingImageCache = false;
+        });
+      }
+    }
+  }
+
   Future<void> _checkUpdate() async {
     if (_checkingUpdate) return;
     setState(() {
@@ -70,9 +127,9 @@ class _SettingsPageState extends State<SettingsPage> {
       final info = await _updateChecker.checkForUpdate();
       if (!mounted) return;
       if (info == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('当前已是最新版本')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('当前已是最新版本')));
         return;
       }
 
@@ -95,7 +152,9 @@ class _SettingsPageState extends State<SettingsPage> {
               FilledButton(
                 onPressed: () async {
                   await launchUrl(
-                    await _updateChecker.releaseUrlForVersion(info.latestVersion),
+                    await _updateChecker.releaseUrlForVersion(
+                      info.latestVersion,
+                    ),
                     mode: LaunchMode.externalApplication,
                   );
                   if (context.mounted) Navigator.of(context).pop();
@@ -164,9 +223,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _showLaunchFailedMessage() {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('无法打开链接，请重启应用后重试。')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('无法打开链接，请稍后重试。')));
   }
 
   @override
@@ -193,14 +252,8 @@ class _SettingsPageState extends State<SettingsPage> {
                       value: ThemeMode.system,
                       child: Text('跟随系统'),
                     ),
-                    DropdownMenuItem(
-                      value: ThemeMode.light,
-                      child: Text('浅色'),
-                    ),
-                    DropdownMenuItem(
-                      value: ThemeMode.dark,
-                      child: Text('深色'),
-                    ),
+                    DropdownMenuItem(value: ThemeMode.light, child: Text('浅色')),
+                    DropdownMenuItem(value: ThemeMode.dark, child: Text('深色')),
                   ],
                   onChanged: (value) {
                     if (value != null) {
@@ -214,7 +267,7 @@ class _SettingsPageState extends State<SettingsPage> {
           Card(
             child: ListTile(
               leading: const Icon(Icons.alt_route),
-              title: const Text('发行通道选择'),
+              title: const Text('发布通道选择'),
               subtitle: Text('当前：$_branch'),
               trailing: DropdownButton<String>(
                 value: _branch,
@@ -255,10 +308,54 @@ class _SettingsPageState extends State<SettingsPage> {
           Card(
             child: ListTile(
               leading: const Icon(Icons.open_in_new),
-              title: const Text('访问项目GitHub'),
-              subtitle: Text('当前版本$_appVersion'),
+              title: const Text('访问项目 GitHub'),
+              subtitle: Text('当前版本 $_appVersion'),
               trailing: const Icon(Icons.chevron_right),
               onTap: _openProjectGithub,
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.gavel_outlined),
+              title: const Text('开源许可'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                showLicensePage(
+                  context: context,
+                  applicationName: 'VRChat Monitor',
+                  applicationVersion: _appVersion,
+                );
+              },
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.public_outlined),
+              title: const Text('清理 world 存储'),
+              subtitle: Text('已存储 $_storedWorldCount 条'),
+              trailing: _clearingWorldStore
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete_sweep_outlined),
+              onTap: _clearingWorldStore ? null : _clearWorldStore,
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.cleaning_services_outlined),
+              title: const Text('清理图片缓存'),
+              subtitle: const Text('效果类似系统“清缓存”中的图片缓存清理'),
+              trailing: _clearingImageCache
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete_outline),
+              onTap: _clearingImageCache ? null : _clearImageCache,
             ),
           ),
           const SizedBox(height: 16),
@@ -268,10 +365,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: const [
-                  Image(
-                    image: AssetImage('assets/developing.gif'),
-                    width: 220,
-                  ),
+                  Image(image: AssetImage('assets/developing.gif'), width: 220),
                   SizedBox(height: 12),
                   Text(
                     '正在努力开发了',

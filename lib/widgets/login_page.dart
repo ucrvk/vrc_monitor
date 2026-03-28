@@ -6,6 +6,7 @@ import 'package:vrc_monitor/services/auth_manager.dart';
 import 'package:vrc_monitor/services/auth_vault.dart';
 import 'package:vrc_monitor/services/cache_manager.dart';
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/widgets/main_shell.dart';
 
 class LoginPage extends StatefulWidget {
@@ -219,6 +220,7 @@ class _LoginPageState extends State<LoginPage> {
     CurrentUser user,
   ) async {
     await CacheManager.instance.initialize(api: api, currentUser: user);
+    await WorldStore.instance.initialize();
     await UserStore.instance.initialize(api);
     await UserStore.instance.startRealtimeSync(api);
 

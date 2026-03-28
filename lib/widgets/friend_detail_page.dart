@@ -12,6 +12,7 @@ import 'package:vrc_monitor/network/vrc_network_image.dart';
 import 'package:vrc_monitor/network/web_client.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/utils/location_utils.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
 
@@ -156,11 +157,12 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     if (lower.contains('private')) return '在私人房间';
 
     final eventWorldName = (() {
-      final parsedTravelingTo = _parseLocation(travelingToLocation?.trim() ?? '');
+      final parsedTravelingTo = _parseLocation(
+        travelingToLocation?.trim() ?? '',
+      );
       final worldId = parsedTravelingTo?.worldId;
       if (worldId == null) return null;
-      final worldName =
-          cache.CacheManager.instance.worldNameCache.worldName(worldId);
+      final worldName = WorldStore.instance.getWorldName(worldId);
       if (worldName == null || worldName.trim().isEmpty) return null;
       return worldName.trim();
     })();
@@ -173,26 +175,18 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     }
 
     final parsed = _parseLocation(location);
-    if (parsed == null || api == null) return location;
+    if (parsed == null) return location;
 
-    String base = location;
-    final cachedWorldName = cache.CacheManager.instance.worldNameCache
-        .worldName(parsed.worldId);
+    var base = location;
+    final cachedWorldName = WorldStore.instance.getWorldName(parsed.worldId);
     if (cachedWorldName != null && cachedWorldName.trim().isNotEmpty) {
       base = cachedWorldName.trim();
-    } else {
+    } else if (api != null) {
       try {
-        final (worldSuccess, _) = await api
-            .getWorldsApi()
-            .getWorld(worldId: parsed.worldId)
-            .validateVrc();
-        final worldName = worldSuccess?.data.name.trim() ?? '';
+        final world = await WorldStore.instance.getOrFetch(parsed.worldId, api);
+        final worldName = world?.name.trim() ?? '';
         if (worldName.isNotEmpty) {
           base = worldName;
-          await cache.CacheManager.instance.worldNameCache.putWorldName(
-            parsed.worldId,
-            worldName,
-          );
         }
       } catch (e) {
         debugPrint('Failed to resolve world name: $e');
@@ -211,7 +205,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         : base;
 
     try {
-      if (cachedType == null || cachedType.trim().isEmpty) {
+      if (api != null && (cachedType == null || cachedType.trim().isEmpty)) {
         final (instanceSuccess, _) = await api
             .getWorldsApi()
             .getWorldInstance(
@@ -615,7 +609,6 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       },
     );
   }
-
 }
 
 class _DetailEnrichment {
@@ -1018,7 +1011,10 @@ class _FriendDetailPageContent extends StatelessWidget {
 
     final avatarThumb = friend.currentAvatarThumbnailImageUrl?.trim() ?? '';
     if (avatarThumb.isNotEmpty) {
-      final imageUrl = cache.ImageCache.toSmallUrl(avatarThumb, isCustom: false);
+      final imageUrl = cache.ImageCache.toSmallUrl(
+        avatarThumb,
+        isCustom: false,
+      );
       return (
         imageUrl: imageUrl,
         fileId: cache.ImageCache.extractFileIdFromUrl(imageUrl),
