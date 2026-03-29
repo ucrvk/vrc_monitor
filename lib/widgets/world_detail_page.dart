@@ -46,10 +46,9 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
   Future<_WorldDetailData> _loadDetail() async {
     await _worldStore.initialize();
 
-    World? world = _worldStore.getWorld(widget.worldId);
-    if (world == null) {
-      world = await _worldStore.getOrFetch(widget.worldId, widget.api);
-    }
+    World? world =
+        _worldStore.getWorld(widget.worldId) ??
+        await _worldStore.getOrFetch(widget.worldId, widget.api);
 
     final imageUrl = world?.imageUrl.trim() ?? '';
     if (imageUrl.isNotEmpty) {
@@ -66,10 +65,7 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
     try {
       final (success, failure) = await widget.api
           .getInstancesApi()
-          .getInstance(
-            worldId: widget.worldId,
-            instanceId: _fullInstanceId,
-          )
+          .getInstance(worldId: widget.worldId, instanceId: _fullInstanceId)
           .validateVrc();
       instance = success?.data;
       if (instance == null && failure != null) {
@@ -101,10 +97,7 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
     try {
       final (success, failure) = await widget.api
           .getInviteApi()
-          .inviteMyselfTo(
-            worldId: widget.worldId,
-            instanceId: _fullInstanceId,
-          )
+          .inviteMyselfTo(worldId: widget.worldId, instanceId: _fullInstanceId)
           .validateVrc();
       if (!mounted) return;
       if (success == null) {
@@ -154,8 +147,7 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
   Future<void> _openFriendDetailPage(String userId) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            FriendDetailPage(userId: userId, api: widget.api),
+        builder: (_) => FriendDetailPage(userId: userId, api: widget.api),
       ),
     );
   }
@@ -185,12 +177,12 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
                 : widget.worldId;
             final roomTypeLabel = _instanceTypeLabel(instance);
             final roomRegionEmoji = _instanceRegionEmoji(instance);
-            final actualRoomId = (instance?.name.trim().isNotEmpty ?? false)
-                ? instance!.name.trim()
-                : _fullInstanceId;
+            final actualRoomId = (instance?.displayName?.isNotEmpty ?? false)
+                ? instance!.displayName!
+                : instance!.name;
             final description = world?.description.trim() ?? '';
-            final currentUsers = instance?.nUsers;
-            final totalUsers = instance?.capacity ?? world?.capacity;
+            final currentUsers = instance.nUsers;
+            final totalUsers = instance.capacity ?? world?.capacity;
 
             return Scaffold(
               body: CustomScrollView(
@@ -235,7 +227,9 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
                                       '$roomRegionEmoji $roomTypeLabel · #$actualRoomId',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context).textTheme.bodyMedium,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodyMedium,
                                     ),
                                   ],
                                 ),
@@ -507,11 +501,7 @@ class _PinnedHeaderDelegate extends SliverPersistentHeaderDelegate {
 }
 
 class _WorldDetailData {
-  const _WorldDetailData({
-    this.world,
-    this.instance,
-    this.errorMessage,
-  });
+  const _WorldDetailData({this.world, this.instance, this.errorMessage});
 
   final World? world;
   final Instance? instance;

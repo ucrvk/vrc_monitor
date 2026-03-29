@@ -320,6 +320,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     final enriched = await _enrichmentFuture;
     final targetName = enriched.user?.displayName ?? widget.userId;
 
+    if (!mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -341,7 +342,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true) return;
 
     setState(() {
       _menuActionLoading = true;

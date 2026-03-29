@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/world_store.dart';
+import 'package:vrc_monitor/utils/location_utils.dart';
 
 class FavoriteGroupData {
   const FavoriteGroupData({required this.name, required this.displayName});
@@ -200,6 +201,49 @@ class UserStore extends ChangeNotifier {
     await loadOfflineFriendIds(api);
     await loadFavoriteData(api);
     notifyListeners();
+  }
+
+  Future<void> refreshForForeground(VrchatDart api) async {
+    await initialize(api);
+    await _refreshSelfLocationFromCurrentUser(api.rawApi);
+    await ensureRealtimeSync(api);
+  }
+
+  Future<void> _refreshSelfLocationFromCurrentUser(VrchatDartGenerated api) async {
+    try {
+      final (success, _) = await api
+          .getAuthenticationApi()
+          .getCurrentUser()
+          .validateVrc();
+      final currentUser = success?.data;
+      if (currentUser == null) return;
+
+      final presence = currentUser.presence;
+      final world = presence?.world?.trim() ?? '';
+      final instance = presence?.instance?.trim() ?? '';
+      var location = '';
+
+      if (world.isEmpty) {
+        location = '';
+      } else if (world.toLowerCase() == 'offline') {
+        location = 'offline';
+      } else if (LocationUtils.isTraveling(world)) {
+        location = 'traveling';
+      } else if (world.startsWith('wrld_') && instance.isNotEmpty) {
+        location = '$world:$instance';
+      } else {
+        location = world;
+      }
+
+      _setSelfLocationState(
+        location: location,
+        instance: instance,
+        worldName: null,
+      );
+      notifyListeners();
+    } catch (_) {
+      // keep previous self location state when refresh fails
+    }
   }
 
   Future<void> startRealtimeSync(VrchatDart api) async {

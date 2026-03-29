@@ -39,6 +39,8 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
   final Set<String> _roomKeysInFlight = <String>{};
   final Set<String> _ownerIdsInFlight = <String>{};
   final Set<String> _worldImageIdsInFlight = <String>{};
+  Timer? _refreshCooldownTimer;
+  int _refreshCooldownSeconds = 0;
 
   @override
   void initState() {
@@ -50,6 +52,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
 
   @override
   void dispose() {
+    _refreshCooldownTimer?.cancel();
     _userStore.removeListener(_handleStoreChanged);
     _worldStore.removeListener(_handleStoreChanged);
     super.dispose();
@@ -69,6 +72,38 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
 
   void _handleStoreChanged() {
     unawaited(_resolveRoomData());
+  }
+
+  Future<void> _onRefreshPressed() async {
+    _startRefreshCooldown();
+    await _userStore.refreshForForeground(widget.api);
+    await _resolveRoomData();
+  }
+
+  void _startRefreshCooldown() {
+    _refreshCooldownTimer?.cancel();
+    setState(() {
+      _refreshCooldownSeconds = 5;
+    });
+
+    _refreshCooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_refreshCooldownSeconds <= 1) {
+        timer.cancel();
+        setState(() {
+          _refreshCooldownSeconds = 0;
+        });
+        return;
+      }
+
+      setState(() {
+        _refreshCooldownSeconds -= 1;
+      });
+    });
   }
 
   Future<void> _resolveRoomData() async {
@@ -334,20 +369,27 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('鍦板浘鎴块棿'),
+        title: const Text('房间排序'),
         actions: [
+          IconButton(
+            onPressed: _refreshCooldownSeconds > 0 ? null : _onRefreshPressed,
+            tooltip: _refreshCooldownSeconds > 0
+                ? '刷新 (${_refreshCooldownSeconds}s)'
+                : '刷新',
+            icon: const Icon(Icons.refresh),
+          ),
           ValueListenableBuilder<MapRoomSortMode>(
             valueListenable: AppMapSettings.roomSortModeNotifier,
             builder: (context, mode, child) {
               return PopupMenuButton<MapRoomSortMode>(
-                tooltip: '鎴块棿鎺掑簭',
+                tooltip: '星标优先',
                 icon: const Icon(Icons.sort),
                 onSelected: AppMapSettings.setRoomSortMode,
                 itemBuilder: (context) => [
                   CheckedPopupMenuItem<MapRoomSortMode>(
                     value: MapRoomSortMode.starFirst,
                     checked: mode == MapRoomSortMode.starFirst,
-                    child: const Text('鏄熸爣浼樺厛'),
+                    child: const Text('总好友数优先'),
                   ),
                   CheckedPopupMenuItem<MapRoomSortMode>(
                     value: MapRoomSortMode.countFirst,
@@ -591,11 +633,11 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
       })();
 
       if (worldName != null && worldName.trim().isNotEmpty) {
-        travelingText = '鉄?姝ｅ湪鍓嶅線 $worldName';
+        travelingText = '正在前往 $worldName';
       } else if (travelingWorldId != null && travelingWorldId.isNotEmpty) {
-        travelingText = '鉄?姝ｅ湪鍓嶅線 $travelingWorldId';
+        travelingText = '正在前往 $travelingWorldId';
       } else {
-        travelingText = '鉄?姝ｅ湪鍓嶅線...';
+        travelingText = '正在前往...';
       }
 
       return _SelfLocationState(
@@ -768,19 +810,19 @@ class _RoomCard extends StatelessWidget {
               children: [
                 if (room.isSelfTraveling)
                   Text(
-                    room.selfTravelingText ?? '鉄?姝ｅ湪鍓嶅線...',
+                    room.selfTravelingText ?? '正在前往...',
                     style: Theme.of(context).textTheme.titleMedium,
                   )
                 else ...[
                   Text(
-                    '${room.regionEmoji ?? '馃寪'} ${room.worldName}#${room.displayInstanceId}'
+                    '${room.regionEmoji ?? '🌍'} ${room.worldName}#${room.displayInstanceId}'
                     '${roomType == null || roomType.isEmpty ? '' : ' $roomType'}',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   if (!isPublicRoom) ...[
                     const SizedBox(height: 6),
                     Text(
-                      '鎴夸富: $ownerLabel',
+                      '房主: $ownerLabel',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -818,7 +860,7 @@ class _RoomCard extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
-                      '褰撳墠娌℃湁濂藉弸鍦ㄦ鎴块棿',
+                      '当前没有好友在此房间',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),

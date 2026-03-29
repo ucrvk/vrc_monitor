@@ -17,14 +17,16 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int _currentTabIndex = 1;
   late final PageController _pageController;
   String? _lastWsFailureShown;
+  bool _refreshingOnResume = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pageController = PageController(initialPage: _currentTabIndex);
     UserStore.instance.addListener(_handleWsFailureNotice);
     unawaited(UserStore.instance.ensureRealtimeSync(widget.api));
@@ -32,10 +34,32 @@ class _MainShellState extends State<MainShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     UserStore.instance.removeListener(_handleWsFailureNotice);
     _pageController.dispose();
     unawaited(UserStore.instance.stopRealtimeSync());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    unawaited(_refreshAfterResume());
+  }
+
+  Future<void> _refreshAfterResume() async {
+    if (_refreshingOnResume) return;
+    _refreshingOnResume = true;
+    try {
+      await UserStore.instance.refreshForForeground(widget.api);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('刷新失败: $e')),
+      );
+    } finally {
+      _refreshingOnResume = false;
+    }
   }
 
   void _handleLogout() {

@@ -286,30 +286,6 @@ class _FriendsPageState extends State<FriendsPage> {
     }
   }
 
-  int _statusPriority(UserStatus status) {
-    switch (status) {
-      case UserStatus.joinMe:
-        return 0;
-      case UserStatus.active:
-        return 1;
-      case UserStatus.askMe:
-        return 2;
-      case UserStatus.busy:
-        return 3;
-      case UserStatus.offline:
-        return 4;
-    }
-  }
-
-  int _onlineFavoritePriority(String friendId) {
-    for (var i = 0; i < _favoriteFriendGroups.length; i++) {
-      if (_favoriteFriendGroups[i].friendIds.contains(friendId)) {
-        return i;
-      }
-    }
-    return _favoriteFriendGroups.length + 1;
-  }
-
   String _locationTextFor(User friend) {
     final eventLocation = _userStore.getEventLocation(friend.id);
     final eventWorldName = (() {
@@ -612,7 +588,7 @@ class _FriendsPageState extends State<FriendsPage> {
 
   Future<void> _onRefreshPressed() async {
     _startRefreshCooldown();
-    await _userStore.initialize(widget.api);
+    await _userStore.refreshForForeground(widget.api);
     _buildFavoriteGroupsFromStore();
     await _resolveLocationsForOnlineFriends();
   }
@@ -638,7 +614,7 @@ class _FriendsPageState extends State<FriendsPage> {
           bio: user.bio,
           statusDescription: user.statusDescription,
           pronouns: user.pronouns,
-          bioLinks: user.bioLinks ?? const [],
+          bioLinks: user.bioLinks,
           dateJoined: user.dateJoined,
           lastActivity: DateTime.tryParse(user.lastActivity),
           profilePicOverrideThumbnail: user.profilePicOverrideThumbnail,
@@ -659,7 +635,7 @@ class _FriendsPageState extends State<FriendsPage> {
           id: limited.id,
           displayName: limited.displayName,
           status: UserStatus.offline,
-          location: limited.location ?? 'offline',
+          location: limited.location,
           locationText: '离线',
           lastPlatform: limited.lastPlatform,
           tags: limited.tags,
