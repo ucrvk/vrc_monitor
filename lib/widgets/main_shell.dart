@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/widgets/friends_map_page.dart';
 import 'package:vrc_monitor/widgets/friends_page.dart';
 import 'package:vrc_monitor/widgets/me_page.dart';
 
@@ -17,7 +18,7 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  int _currentTabIndex = 0;
+  int _currentTabIndex = 1;
   late final PageController _pageController;
 
   @override
@@ -49,8 +50,13 @@ class _MainShellState extends State<MainShell> {
           });
         },
         children: [
+          FriendsMapPage(api: widget.api, currentUser: widget.currentUser),
           FriendsPage(api: widget.api, currentUser: widget.currentUser),
-          MePage(api: widget.api, currentUser: widget.currentUser, onLogout: _handleLogout),
+          MePage(
+            api: widget.api,
+            currentUser: widget.currentUser,
+            onLogout: _handleLogout,
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -66,6 +72,11 @@ class _MainShellState extends State<MainShell> {
           });
         },
         destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.map_outlined),
+            selectedIcon: Icon(Icons.map),
+            label: '地图',
+          ),
           NavigationDestination(
             icon: Icon(Icons.location_on_outlined),
             selectedIcon: Icon(Icons.location_on),

@@ -21,6 +21,7 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
   void initState() {
     super.initState();
     AppThemeSettings.load();
+    AppMapSettings.load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkUpdateInBackground();
     });

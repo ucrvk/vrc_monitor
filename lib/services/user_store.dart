@@ -154,6 +154,10 @@ class UserStore extends ChangeNotifier {
   final Map<String, String> _headerFileIdByUserId = <String, String>{};
   final Map<String, String> _locationByUserId = <String, String>{};
   final Map<String, String> _eventWorldNameByUserId = <String, String>{};
+  String? _selfLocation;
+  String? _selfInstance;
+  String? _selfEventWorldName;
+  String? _selfWorldId;
   final Map<String, LimitedUserFriend> _limitedUsers =
       <String, LimitedUserFriend>{};
   final Map<String, List<MutualFriend>> _mutualFriends =
@@ -230,6 +234,7 @@ class UserStore extends ChangeNotifier {
     }
     _wsRunning = false;
     _wsConnecting = false;
+    _clearSelfLocationState();
     _updateWsStatus(notify: true);
   }
 
@@ -608,6 +613,15 @@ class UserStore extends ChangeNotifier {
           _onlineFriendIds.remove(e.user.id);
         }
         break;
+      case VrcStreamingEventType.userLocation:
+        final e = event as UserLocationEvent;
+        _setSelfLocationState(
+          location: e.location,
+          instance: e.instance,
+          worldName: e.world?.name,
+        );
+        _cacheWorldFromEvent(world: e.world, location: e.location);
+        break;
       default:
         return;
     }
@@ -663,6 +677,14 @@ class UserStore extends ChangeNotifier {
 
   String? getEventWorldName(String userId) => _eventWorldNameByUserId[userId];
 
+  String? getSelfLocation() => _selfLocation;
+
+  String? getSelfInstance() => _selfInstance;
+
+  String? getSelfEventWorldName() => _selfEventWorldName;
+
+  String? getSelfWorldId() => _selfWorldId;
+
   Color trustColorForTags(List<String> tags) {
     final trustTags = tags.map((e) => e.toLowerCase()).toSet();
     if (trustTags.contains('system_trust_veteran')) {
@@ -705,6 +727,36 @@ class UserStore extends ChangeNotifier {
     final next = worldName?.trim() ?? '';
     if (next.isEmpty) return;
     _eventWorldNameByUserId[userId] = next;
+  }
+
+  void _setSelfLocationState({
+    required String? location,
+    required String? instance,
+    required String? worldName,
+  }) {
+    final normalizedLocation = location?.trim() ?? '';
+    final normalizedInstance = instance?.trim() ?? '';
+    final normalizedWorldName = worldName?.trim() ?? '';
+    final parsed = cache.CacheManager.parseLocation(normalizedLocation);
+
+    _selfLocation = normalizedLocation.isEmpty ? null : normalizedLocation;
+    _selfInstance = normalizedInstance.isEmpty ? null : normalizedInstance;
+    _selfWorldId = parsed?.worldId;
+    _selfEventWorldName = normalizedWorldName.isEmpty
+        ? null
+        : normalizedWorldName;
+
+    final lower = normalizedLocation.toLowerCase();
+    if (lower == 'offline') {
+      _clearSelfLocationState();
+    }
+  }
+
+  void _clearSelfLocationState() {
+    _selfLocation = null;
+    _selfInstance = null;
+    _selfEventWorldName = null;
+    _selfWorldId = null;
   }
 
   static String? _extractAvatarFileId(User user) {
@@ -854,6 +906,7 @@ class UserStore extends ChangeNotifier {
     _loadingFriendStatusById.clear();
     _favoriteGroups = const [];
     _userFavoriteGroup = {};
+    _clearSelfLocationState();
     if (notify) notifyListeners();
   }
 

@@ -129,41 +129,40 @@ class _SettingsPageState extends State<SettingsPage> {
       if (info == null) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('当前已是最新版本')));
+        ).showSnackBar(const SnackBar(content: Text('当前已经是最新版本')));
         return;
       }
 
       await showDialog<void>(
         context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text('发现新版本'),
-            content: Text(
-              info.force
-                  ? '发现新版本 ${info.latestVersion}，请立即更新。'
-                  : '发现新版本 ${info.latestVersion}，是否前往更新？',
-            ),
-            actions: [
-              if (!info.force)
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('稍后'),
-                ),
-              FilledButton(
-                onPressed: () async {
-                  await launchUrl(
-                    await _updateChecker.releaseUrlForVersion(
-                      info.latestVersion,
-                    ),
-                    mode: LaunchMode.externalApplication,
-                  );
-                  if (context.mounted) Navigator.of(context).pop();
-                },
-                child: const Text('前往更新'),
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('发现新版本'),
+          content: Text(
+            info.force
+                ? '发现新版本 ${info.latestVersion}，请立即更新。'
+                : '发现新版本 ${info.latestVersion}，是否前往更新？',
+          ),
+          actions: [
+            if (!info.force)
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('稍后'),
               ),
-            ],
-          );
-        },
+            FilledButton(
+              onPressed: () async {
+                final navigator = Navigator.of(dialogContext);
+                await launchUrl(
+                  await _updateChecker.releaseUrlForVersion(info.latestVersion),
+                  mode: LaunchMode.externalApplication,
+                );
+                if (mounted) {
+                  navigator.pop();
+                }
+              },
+              child: const Text('前往更新'),
+            ),
+          ],
+        ),
       );
     } finally {
       if (mounted) {
@@ -184,7 +183,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('隐私政策'),
         content: SingleChildScrollView(
           child: SizedBox(
@@ -197,7 +196,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
         actions: [
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('我知道了'),
           ),
         ],
@@ -212,10 +211,7 @@ class _SettingsPageState extends State<SettingsPage> {
         config.githubPageUri,
         mode: LaunchMode.externalApplication,
       );
-      if (launched) return;
-      _showLaunchFailedMessage();
-    } on PlatformException {
-      _showLaunchFailedMessage();
+      if (!launched) _showLaunchFailedMessage();
     } catch (_) {
       _showLaunchFailedMessage();
     }
@@ -268,7 +264,7 @@ class _SettingsPageState extends State<SettingsPage> {
             child: ListTile(
               leading: const Icon(Icons.alt_route),
               title: const Text('发布通道选择'),
-              subtitle: Text('当前：$_branch'),
+              subtitle: Text('当前: $_branch'),
               trailing: DropdownButton<String>(
                 value: _branch,
                 items: const [
@@ -368,7 +364,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   Image(image: AssetImage('assets/developing.gif'), width: 220),
                   SizedBox(height: 12),
                   Text(
-                    '正在努力开发了',
+                    '正在努力开发中',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                   ),
                 ],
