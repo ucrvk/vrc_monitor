@@ -52,10 +52,13 @@ class _MePageState extends State<MePage> {
                 child: IconButton(
                   tooltip: '服务器连接状态',
                   onPressed: () {
+                    final failure = UserStore.instance.wsFailureMessage;
                     final text = switch (status) {
                       WsConnectionStatus.connected => '服务器连接状态：连接',
                       WsConnectionStatus.connecting => '服务器连接状态：正在连接',
-                      WsConnectionStatus.disconnected => '服务器连接状态：断开连接',
+                      WsConnectionStatus.disconnected => failure == null
+                          ? '服务器连接状态：断开连接'
+                          : '服务器连接状态：断开连接\n$failure',
                     };
                     ScaffoldMessenger.of(
                       context,

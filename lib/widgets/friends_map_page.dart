@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +12,7 @@ import 'package:vrc_monitor/utils/location_utils.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/me_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
+import 'package:vrc_monitor/widgets/world_detail_page.dart';
 
 class FriendsMapPage extends StatefulWidget {
   const FriendsMapPage({
@@ -306,24 +307,47 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
     );
   }
 
+  Future<void> _openWorldDetailPage(_RoomGroupViewModel room) async {
+    if (room.isSelfTraveling) return;
+    if (!room.worldId.startsWith('wrld_')) return;
+    if (room.instanceId.trim().isEmpty) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WorldDetailPage(
+          api: widget.api.rawApi,
+          worldId: room.worldId,
+          instanceId: room.instanceId,
+        ),
+      ),
+    );
+  }
+
+  String _displayInstanceId(String fullInstanceId) {
+    final full = fullInstanceId.trim();
+    if (full.isEmpty) return full;
+    final short = full.split('~').first.trim();
+    if (short.isEmpty) return full;
+    return short;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('地图房间'),
+        title: const Text('鍦板浘鎴块棿'),
         actions: [
           ValueListenableBuilder<MapRoomSortMode>(
             valueListenable: AppMapSettings.roomSortModeNotifier,
             builder: (context, mode, child) {
               return PopupMenuButton<MapRoomSortMode>(
-                tooltip: '房间排序',
+                tooltip: '鎴块棿鎺掑簭',
                 icon: const Icon(Icons.sort),
                 onSelected: AppMapSettings.setRoomSortMode,
                 itemBuilder: (context) => [
                   CheckedPopupMenuItem<MapRoomSortMode>(
                     value: MapRoomSortMode.starFirst,
                     checked: mode == MapRoomSortMode.starFirst,
-                    child: const Text('星标优先'),
+                    child: const Text('鏄熸爣浼樺厛'),
                   ),
                   CheckedPopupMenuItem<MapRoomSortMode>(
                     value: MapRoomSortMode.countFirst,
@@ -347,7 +371,9 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
           final privateRoomFriendCount = _countPrivateRoomFriends();
           if (rooms.isEmpty) {
             return Center(
-              child: Text('暂无可显示的在线房间\n您还有$privateRoomFriendCount个好友在私人房间'),
+              child: Text(
+                '暂无可显示的在线房间\n您还有$privateRoomFriendCount个好友在私人房间',
+              ),
             );
           }
           return ListView(
@@ -358,6 +384,9 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
                   room: rooms[i],
                   dio: widget.api.rawApi.dio,
                   onTapFriend: _openFriendDetailPage,
+                  onTapRoom: rooms[i].isSelfTraveling
+                      ? null
+                      : () => _openWorldDetailPage(rooms[i]),
                   showSelfTile: rooms[i].isSelfRoom || rooms[i].isSelfTraveling,
                   selfAvatarUrl: _currentUserAvatarUrl(),
                   selfAvatarFileId: _userStore.getAvatarFileId(
@@ -416,6 +445,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
           roomKey: '__self_traveling__',
           worldId: selfState.travelingWorldId ?? '',
           instanceId: '',
+          displayInstanceId: '',
           worldName: '',
           worldImageUrl: null,
           roomTypeLabel: null,
@@ -467,6 +497,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
         roomKey: builder.roomKey,
         worldId: normalizedWorldId,
         instanceId: builder.instanceId,
+        displayInstanceId: _displayInstanceId(builder.instanceId),
         worldName: worldName,
         worldImageUrl: world?.imageUrl,
         roomTypeLabel: _instanceTypeByRoomKey[builder.roomKey],
@@ -560,11 +591,11 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
       })();
 
       if (worldName != null && worldName.trim().isNotEmpty) {
-        travelingText = '⟳ 正在前往 $worldName';
+        travelingText = '鉄?姝ｅ湪鍓嶅線 $worldName';
       } else if (travelingWorldId != null && travelingWorldId.isNotEmpty) {
-        travelingText = '⟳ 正在前往 $travelingWorldId';
+        travelingText = '鉄?姝ｅ湪鍓嶅線 $travelingWorldId';
       } else {
-        travelingText = '⟳ 正在前往...';
+        travelingText = '鉄?姝ｅ湪鍓嶅線...';
       }
 
       return _SelfLocationState(
@@ -666,7 +697,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
     if (parsed == null) return null;
 
     final instanceIdWithFlags = parsed.instanceId.trim();
-    final instanceId = instanceIdWithFlags.split('~').first.trim();
+    final instanceId = instanceIdWithFlags;
     if (instanceId.isEmpty) return null;
     final ownerUserId = _extractHiddenOwnerUserId(raw);
     return _RoomLocationRef(
@@ -700,6 +731,7 @@ class _RoomCard extends StatelessWidget {
     required this.room,
     required this.dio,
     required this.onTapFriend,
+    required this.onTapRoom,
     required this.showSelfTile,
     required this.selfAvatarUrl,
     required this.selfAvatarFileId,
@@ -709,6 +741,7 @@ class _RoomCard extends StatelessWidget {
   final _RoomGroupViewModel room;
   final Dio dio;
   final Future<void> Function(String userId) onTapFriend;
+  final VoidCallback? onTapRoom;
   final bool showSelfTile;
   final String? selfAvatarUrl;
   final String? selfAvatarFileId;
@@ -724,7 +757,10 @@ class _RoomCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _WorldImageBanner(imageUrl: room.worldImageUrl, dio: dio),
+          InkWell(
+            onTap: onTapRoom,
+            child: _WorldImageBanner(imageUrl: room.worldImageUrl, dio: dio),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
             child: Column(
@@ -732,19 +768,19 @@ class _RoomCard extends StatelessWidget {
               children: [
                 if (room.isSelfTraveling)
                   Text(
-                    room.selfTravelingText ?? '⟳ 正在前往...',
+                    room.selfTravelingText ?? '鉄?姝ｅ湪鍓嶅線...',
                     style: Theme.of(context).textTheme.titleMedium,
                   )
                 else ...[
                   Text(
-                    '${room.regionEmoji ?? '🌐'} ${room.worldName}#${room.instanceId}'
+                    '${room.regionEmoji ?? '馃寪'} ${room.worldName}#${room.displayInstanceId}'
                     '${roomType == null || roomType.isEmpty ? '' : ' $roomType'}',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   if (!isPublicRoom) ...[
                     const SizedBox(height: 6),
                     Text(
-                      '房主: $ownerLabel',
+                      '鎴夸富: $ownerLabel',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -782,7 +818,7 @@ class _RoomCard extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
-                      '当前没有好友在此房间',
+                      '褰撳墠娌℃湁濂藉弸鍦ㄦ鎴块棿',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),
@@ -931,6 +967,7 @@ class _RoomGroupViewModel {
     required this.roomKey,
     required this.worldId,
     required this.instanceId,
+    required this.displayInstanceId,
     required this.worldName,
     required this.worldImageUrl,
     required this.roomTypeLabel,
@@ -947,6 +984,7 @@ class _RoomGroupViewModel {
   final String roomKey;
   final String worldId;
   final String instanceId;
+  final String displayInstanceId;
   final String worldName;
   final String? worldImageUrl;
   final String? roomTypeLabel;
@@ -1005,3 +1043,4 @@ class _SelfLocationState {
   final String? travelingText;
   final String? travelingWorldId;
 }
+

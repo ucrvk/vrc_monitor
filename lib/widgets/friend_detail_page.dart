@@ -15,6 +15,7 @@ import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/utils/location_utils.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
+import 'package:vrc_monitor/widgets/world_detail_page.dart';
 
 class FriendDetailPage extends StatefulWidget {
   const FriendDetailPage({super.key, required this.userId, this.api});
@@ -67,11 +68,16 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       final isFriend = friendStatus?.isFriend ?? false;
 
       final eventLocation = userStore.getEventLocation(widget.userId);
+      final resolvedEventLocation = eventLocation ?? user?.location;
       final locationText = await _resolveLocationText(
         status: user?.status ?? UserStatus.offline,
-        eventLocation: eventLocation ?? user?.location,
+        eventLocation: resolvedEventLocation,
         travelingToLocation: user?.travelingToLocation,
         api: api,
+      );
+      final locationRef = _resolveLocationRef(
+        status: user?.status ?? UserStatus.offline,
+        eventLocation: resolvedEventLocation,
       );
 
       final favoriteGroups = userStore.getFavoriteGroups();
@@ -125,6 +131,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       return _DetailEnrichment(
         user: user,
         locationText: locationText,
+        locationRef: locationRef,
         isFriend: isFriend,
         favoriteGroups: favoriteGroups
             .map(
@@ -238,6 +245,20 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     return regionEmoji != null
         ? '$regionEmoji $locationWithLabel'
         : locationWithLabel;
+  }
+
+  _ParsedLocation? _resolveLocationRef({
+    required UserStatus status,
+    required String? eventLocation,
+  }) {
+    if (status == UserStatus.offline) return null;
+    final location = eventLocation?.trim() ?? '';
+    if (location.isEmpty) return null;
+    final lower = location.toLowerCase();
+    if (lower == 'offline') return null;
+    if (lower.contains('private')) return null;
+    if (LocationUtils.isTraveling(location)) return null;
+    return _parseLocation(location);
   }
 
   _ParsedLocation? _parseLocation(String location) {
@@ -568,6 +589,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
               ? currentAvatarImageUrl
               : null,
           locationText: snapshot.data?.locationText,
+          locationRef: snapshot.data?.locationRef,
           bio: enrichedUser?.bio,
           nameColor: nameColor,
           status: enrichedUser?.status ?? UserStatus.offline,
@@ -615,6 +637,7 @@ class _DetailEnrichment {
   const _DetailEnrichment({
     this.user,
     this.locationText,
+    this.locationRef,
     this.isFriend = false,
     this.favoriteGroups = const [],
     this.selectedGroupName,
@@ -623,6 +646,7 @@ class _DetailEnrichment {
 
   final User? user;
   final String? locationText;
+  final _ParsedLocation? locationRef;
   final bool isFriend;
   final List<_FavoriteGroupView> favoriteGroups;
   final String? selectedGroupName;
@@ -670,6 +694,7 @@ class _FriendDetailPageContent extends StatelessWidget {
     this.profilePicOverride,
     this.currentAvatarImageUrl,
     this.locationText,
+    this.locationRef,
     this.bio,
     this.nameColor,
     this.status = UserStatus.offline,
@@ -694,6 +719,7 @@ class _FriendDetailPageContent extends StatelessWidget {
   final String? profilePicOverride;
   final String? currentAvatarImageUrl;
   final String? locationText;
+  final _ParsedLocation? locationRef;
   final String? bio;
   final Color? nameColor;
   final UserStatus status;
@@ -706,6 +732,21 @@ class _FriendDetailPageContent extends StatelessWidget {
   final VrchatDartGenerated? api;
   final List<Widget> appBarActions;
 
+  Future<void> _openWorldDetail(BuildContext context) async {
+    final parsed = locationRef;
+    final rawApi = api;
+    if (parsed == null || rawApi == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WorldDetailPage(
+          api: rawApi,
+          worldId: parsed.worldId,
+          instanceId: parsed.instanceId,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     const expandedHeaderHeight = 260.0;
@@ -715,6 +756,7 @@ class _FriendDetailPageContent extends StatelessWidget {
     final normalizedLocationText = locationText?.trim() ?? '';
     final showLocation =
         status != UserStatus.offline && normalizedLocationText.isNotEmpty;
+    final canOpenWorld = api != null && locationRef != null;
     final visibleLinks = _sanitizeBioLinks(bioLinks).take(3).toList();
     final filteredMutualFriends = _visibleMutualFriends;
     final hiddenMutualCount = _hiddenMutualCount;
@@ -757,11 +799,24 @@ class _FriendDetailPageContent extends StatelessWidget {
                   if (showLocation)
                     Card(
                       margin: const EdgeInsets.only(bottom: 12),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text('当前位置：$normalizedLocationText'),
+                      child: InkWell(
+                        onTap: canOpenWorld
+                            ? () => _openWorldDetail(context)
+                            : null,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text('当前位置：$normalizedLocationText'),
+                                ),
+                              ),
+                              if (canOpenWorld)
+                                const Icon(Icons.chevron_right),
+                            ],
+                          ),
                         ),
                       ),
                     ),

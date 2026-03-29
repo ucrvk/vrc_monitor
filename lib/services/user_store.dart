@@ -176,6 +176,7 @@ class UserStore extends ChangeNotifier {
   bool _stopRequested = false;
   int _reconnectAttempt = 0;
   WsConnectionStatus _wsStatus = WsConnectionStatus.disconnected;
+  String? _wsFailureMessage;
 
   List<FavoriteGroupData> _favoriteGroups = const [];
   Map<String, String> _userFavoriteGroup = {}; // userId -> groupName
@@ -202,17 +203,28 @@ class UserStore extends ChangeNotifier {
   }
 
   Future<void> startRealtimeSync(VrchatDart api) async {
-    _streamingApiRef = api;
-    _stopRequested = false;
-    if (_wsRunning || _wsConnecting) return;
-    _updateWsStatus(notify: true);
-    await _connectStreaming();
+    try {
+      _streamingApiRef = api;
+      _stopRequested = false;
+      if (_wsRunning || _wsConnecting) return;
+      _updateWsStatus(notify: true);
+      await _connectStreaming();
+    } catch (e) {
+      _setWsFailureMessage('WS连接失败，服务严重降级: $e');
+      _wsRunning = false;
+      _wsConnecting = false;
+      _updateWsStatus(notify: true);
+    }
   }
 
   Future<void> ensureRealtimeSync(VrchatDart api) async {
     _streamingApiRef = api;
     if (_wsRunning || _wsConnecting) return;
-    await startRealtimeSync(api);
+    try {
+      await startRealtimeSync(api);
+    } catch (_) {
+      // startRealtimeSync already downgrades to ws failure state
+    }
   }
 
   Future<void> stopRealtimeSync() async {
@@ -234,6 +246,7 @@ class UserStore extends ChangeNotifier {
     }
     _wsRunning = false;
     _wsConnecting = false;
+    _wsFailureMessage = null;
     _clearSelfLocationState();
     _updateWsStatus(notify: true);
   }
@@ -254,24 +267,34 @@ class UserStore extends ChangeNotifier {
       _wsSubscription = api.streaming.vrcEventStream.listen(
         (event) {
           _reconnectAttempt = 0;
+          if (_wsFailureMessage != null) {
+            _wsFailureMessage = null;
+            notifyListeners();
+          }
           handleWebSocketEvent(event);
         },
         onError: (Object error) {
           debugPrint('[WS] Stream error: $error');
+          _setWsFailureMessage('WS连接失败，服务严重降级');
           _handleStreamingDisconnected();
         },
         onDone: () {
           debugPrint('[WS] Connection closed');
+          if (!_stopRequested) {
+            _setWsFailureMessage('WS连接失败，服务严重降级');
+          }
           _handleStreamingDisconnected();
         },
       );
 
       api.streaming.start();
       _wsRunning = true;
+      _wsFailureMessage = null;
       _updateWsStatus(notify: true);
       debugPrint('[WS] Connection started');
     } catch (e) {
       debugPrint('[WS] Connection start failed: $e');
+      _setWsFailureMessage('WS连接失败，服务严重降级');
       _wsRunning = false;
       final sub = _wsSubscription;
       _wsSubscription = null;
@@ -314,6 +337,13 @@ class UserStore extends ChangeNotifier {
   }
 
   WsConnectionStatus get wsConnectionStatus => _wsStatus;
+  String? get wsFailureMessage => _wsFailureMessage;
+
+  void _setWsFailureMessage(String message) {
+    if (_wsFailureMessage == message) return;
+    _wsFailureMessage = message;
+    notifyListeners();
+  }
 
   void _updateWsStatus({required bool notify}) {
     final next = _wsRunning

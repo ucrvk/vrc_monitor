@@ -20,16 +20,19 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _currentTabIndex = 1;
   late final PageController _pageController;
+  String? _lastWsFailureShown;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _currentTabIndex);
+    UserStore.instance.addListener(_handleWsFailureNotice);
     unawaited(UserStore.instance.ensureRealtimeSync(widget.api));
   }
 
   @override
   void dispose() {
+    UserStore.instance.removeListener(_handleWsFailureNotice);
     _pageController.dispose();
     unawaited(UserStore.instance.stopRealtimeSync());
     super.dispose();
@@ -37,6 +40,17 @@ class _MainShellState extends State<MainShell> {
 
   void _handleLogout() {
     unawaited(UserStore.instance.stopRealtimeSync());
+  }
+
+  void _handleWsFailureNotice() {
+    if (!mounted) return;
+    final message = UserStore.instance.wsFailureMessage;
+    if (message == null || message.isEmpty) return;
+    if (_lastWsFailureShown == message) return;
+    _lastWsFailureShown = message;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
