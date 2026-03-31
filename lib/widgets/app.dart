@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vrc_monitor/app_settings.dart';
+import 'package:vrc_monitor/services/app_navigator.dart';
+import 'package:vrc_monitor/services/session_guard.dart';
 import 'package:vrc_monitor/update_checker.dart';
 import 'package:vrc_monitor/widgets/login_page.dart';
 
@@ -14,8 +18,9 @@ class VrcMonitorApp extends StatefulWidget {
 
 class _VrcMonitorAppState extends State<VrcMonitorApp> {
   final AppUpdateChecker _updateChecker = AppUpdateChecker();
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  late final StreamSubscription<SessionEvent> _sessionSubscription;
   bool _checkedOnce = false;
+  bool _navigatingToLogin = false;
 
   @override
   void initState() {
@@ -25,6 +30,15 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkUpdateInBackground();
     });
+    _sessionSubscription = SessionGuard.instance.events.listen(
+      _handleSessionEvent,
+    );
+  }
+
+  @override
+  void dispose() {
+    _sessionSubscription.cancel();
+    super.dispose();
   }
 
   Future<void> _checkUpdateInBackground() async {
@@ -42,7 +56,7 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
   }
 
   Future<void> _showOptionalUpdateDialog(String latestVersion) async {
-    final dialogContext = _navigatorKey.currentContext;
+    final dialogContext = AppNavigator.navigatorKey.currentContext;
     if (dialogContext == null) return;
 
     await showDialog<void>(
@@ -81,7 +95,7 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
   }
 
   Future<void> _showForceUpdateDialog(String latestVersion) async {
-    final dialogContext = _navigatorKey.currentContext;
+    final dialogContext = AppNavigator.navigatorKey.currentContext;
     if (dialogContext == null) return;
 
     await showDialog<void>(
@@ -113,13 +127,42 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
     );
   }
 
+  Future<void> _handleSessionEvent(SessionEvent event) async {
+    switch (event.type) {
+      case SessionEventType.rotationNotice:
+        final message = event.message?.trim() ?? '';
+        if (message.isEmpty) return;
+        AppNavigator.scaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      case SessionEventType.requireLogin:
+        if (_navigatingToLogin) return;
+        final navigator = AppNavigator.navigatorKey.currentState;
+        if (navigator == null) return;
+        _navigatingToLogin = true;
+        try {
+          await navigator.pushAndRemoveUntil(
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  LoginPage(skipTokenAutoLogin: event.skipTokenAutoLogin),
+              settings: const RouteSettings(name: 'login'),
+            ),
+            (route) => false,
+          );
+        } finally {
+          _navigatingToLogin = false;
+        }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: AppThemeSettings.themeModeNotifier,
       builder: (context, themeMode, _) {
         return MaterialApp(
-          navigatorKey: _navigatorKey,
+          navigatorKey: AppNavigator.navigatorKey,
+          scaffoldMessengerKey: AppNavigator.scaffoldMessengerKey,
           title: 'VRChat Monitor',
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),

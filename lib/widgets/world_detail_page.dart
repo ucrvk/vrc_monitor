@@ -234,22 +234,6 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 10),
-                              FilledButton.icon(
-                                onPressed: _inviteLoading
-                                    ? null
-                                    : _inviteMyself,
-                                icon: _inviteLoading
-                                    ? const SizedBox(
-                                        width: 14,
-                                        height: 14,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.send, size: 16),
-                                label: const Text('邀请自己'),
-                              ),
                             ],
                           ),
                         ),
@@ -294,9 +278,33 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
                             ),
                             const SizedBox(height: 12),
                           ],
-                          Text(
-                            '房间人数: ${currentUsers?.toString() ?? '--'}/${totalUsers?.toString() ?? '--'} (${roomFriends.length})',
-                            style: Theme.of(context).textTheme.titleMedium,
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '房间人数: ${currentUsers.toString()}/${totalUsers?.toString() ?? '--'} (${roomFriends.length})',
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              FilledButton.icon(
+                                onPressed: _inviteLoading
+                                    ? null
+                                    : _inviteMyself,
+                                icon: _inviteLoading
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.send, size: 16),
+                                label: const Text('邀请自己'),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 12),
                           Card(

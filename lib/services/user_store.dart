@@ -3,6 +3,7 @@ import 'dart:ui' show Color;
 
 import 'package:flutter/foundation.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/auth_manager.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/utils/location_utils.dart';
@@ -209,7 +210,9 @@ class UserStore extends ChangeNotifier {
     await ensureRealtimeSync(api);
   }
 
-  Future<void> _refreshSelfLocationFromCurrentUser(VrchatDartGenerated api) async {
+  Future<void> _refreshSelfLocationFromCurrentUser(
+    VrchatDartGenerated api,
+  ) async {
     try {
       final (success, _) = await api
           .getAuthenticationApi()
@@ -251,6 +254,13 @@ class UserStore extends ChangeNotifier {
       _streamingApiRef = api;
       _stopRequested = false;
       if (_wsRunning || _wsConnecting) return;
+      final ready = await AuthManager.instance.ensureAuthenticatedSession(
+        api,
+        allowForcedLogin: true,
+        emitRotationNotice: false,
+        navigateOnFailure: true,
+      );
+      if (!ready) return;
       _updateWsStatus(notify: true);
       await _connectStreaming();
     } catch (e) {
@@ -307,6 +317,17 @@ class UserStore extends ChangeNotifier {
     _wsConnecting = true;
     _updateWsStatus(notify: true);
     try {
+      final ready = await AuthManager.instance.ensureAuthenticatedSession(
+        api,
+        allowForcedLogin: true,
+        emitRotationNotice: true,
+        navigateOnFailure: true,
+      );
+      if (!ready) {
+        _wsConnecting = false;
+        _updateWsStatus(notify: true);
+        return;
+      }
       debugPrint('[WS] Connecting to VRChat WebSocket...');
       _wsSubscription = api.streaming.vrcEventStream.listen(
         (event) {

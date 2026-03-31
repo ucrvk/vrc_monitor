@@ -5,6 +5,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vrc_monitor/app_config.dart';
 import 'package:vrc_monitor/app_settings.dart';
+import 'package:vrc_monitor/services/auth_vault.dart';
 import 'package:vrc_monitor/services/cache_manager.dart';
 import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/update_checker.dart';
@@ -23,6 +24,8 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _checkingUpdate = false;
   bool _clearingWorldStore = false;
   bool _clearingImageCache = false;
+  bool _updatingForceAutoLogin = false;
+  bool _forceAutoLogin = false;
   int _storedWorldCount = 0;
 
   @override
@@ -30,7 +33,16 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _loadBranch();
     _loadAppVersion();
+    _loadAuthSettings();
     _refreshWorldCount();
+  }
+
+  Future<void> _loadAuthSettings() async {
+    final forceAutoLogin = await AuthVault.instance.readForceAutoLogin();
+    if (!mounted) return;
+    setState(() {
+      _forceAutoLogin = forceAutoLogin;
+    });
   }
 
   Future<void> _loadBranch() async {
@@ -217,6 +229,46 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _setForceAutoLogin(bool value) async {
+    if (_updatingForceAutoLogin) return;
+
+    if (value) {
+      final username = (await AuthVault.instance.readUsername()).trim();
+      final password = await AuthVault.instance.readPassword();
+      if (username.isEmpty || password.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('请先使用记住密码登录一次后再开启强制自动登录')));
+        return;
+      }
+    }
+
+    setState(() {
+      _updatingForceAutoLogin = true;
+    });
+    try {
+      await AuthVault.instance.writeForceAutoLogin(value);
+      if (!mounted) return;
+      setState(() {
+        _forceAutoLogin = value;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            value ? '已开启强制自动登录，Token 全部失效时会自动使用保存的账号密码重新登录' : '已关闭强制自动登录',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingForceAutoLogin = false;
+        });
+      }
+    }
+  }
+
   void _showLaunchFailedMessage() {
     if (!mounted) return;
     ScaffoldMessenger.of(
@@ -280,48 +332,14 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.system_update_alt),
-              title: const Text('检查更新'),
-              trailing: _checkingUpdate
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.chevron_right),
-              onTap: _checkingUpdate ? null : _checkUpdate,
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.privacy_tip_outlined),
-              title: const Text('隐私政策'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: _openPrivacyPolicy,
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.open_in_new),
-              title: const Text('访问项目 GitHub'),
-              subtitle: Text('当前版本 $_appVersion'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: _openProjectGithub,
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.gavel_outlined),
-              title: const Text('开源许可'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                showLicensePage(
-                  context: context,
-                  applicationName: 'VRChat Monitor',
-                  applicationVersion: _appVersion,
-                );
-              },
+            child: SwitchListTile(
+              secondary: const Icon(Icons.lock_reset_outlined),
+              value: _forceAutoLogin,
+              onChanged: _updatingForceAutoLogin ? null : _setForceAutoLogin,
+              title: const Text('强制自动登录'),
+              subtitle: const Text(
+                '开启后会强制记住密码；当 Token 池全部失效时，将直接使用保存的账号密码重新登录。',
+              ),
             ),
           ),
           Card(
@@ -354,6 +372,53 @@ class _SettingsPageState extends State<SettingsPage> {
               onTap: _clearingImageCache ? null : _clearImageCache,
             ),
           ),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.system_update_alt),
+                  title: const Text('检查更新'),
+                  trailing: _checkingUpdate
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.chevron_right),
+                  onTap: _checkingUpdate ? null : _checkUpdate,
+                ),
+                Divider(height: 1, thickness: 1),
+                ListTile(
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: const Text('隐私政策'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openPrivacyPolicy,
+                ),
+                Divider(height: 1, thickness: 1),
+                ListTile(
+                  leading: const Icon(Icons.gavel_outlined),
+                  title: const Text('开源许可'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    showLicensePage(
+                      context: context,
+                      applicationName: 'VRChat Monitor',
+                      applicationVersion: _appVersion,
+                    );
+                  },
+                ),
+                Divider(height: 1, thickness: 1),
+                ListTile(
+                  leading: const Icon(Icons.open_in_new),
+                  title: const Text('访问项目 GitHub'),
+                  subtitle: Text('当前版本 $_appVersion'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openProjectGithub,
+                ),
+              ],
+            ),
+          ),
+
           const SizedBox(height: 16),
           Card(
             child: Padding(

@@ -389,12 +389,12 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
                   CheckedPopupMenuItem<MapRoomSortMode>(
                     value: MapRoomSortMode.starFirst,
                     checked: mode == MapRoomSortMode.starFirst,
-                    child: const Text('总好友数优先'),
+                    child: const Text('星标好友优先'),
                   ),
                   CheckedPopupMenuItem<MapRoomSortMode>(
                     value: MapRoomSortMode.countFirst,
                     checked: mode == MapRoomSortMode.countFirst,
-                    child: const Text('总人数优先'),
+                    child: const Text('总好友数优先'),
                   ),
                 ],
               );

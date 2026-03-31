@@ -5,18 +5,23 @@ import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/auth_manager.dart';
 import 'package:vrc_monitor/services/auth_vault.dart';
 import 'package:vrc_monitor/services/cache_manager.dart';
+import 'package:vrc_monitor/services/session_guard.dart';
 import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/widgets/main_shell.dart';
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+  const LoginPage({super.key, this.skipTokenAutoLogin = false});
+
+  final bool skipTokenAutoLogin;
 
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
 
 class _LoginPageState extends State<LoginPage> {
+  static const String _riskControlMessage = '登录流程被风控系统拦截，请检查您的安全设备(通常是邮件来解决)';
+
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
@@ -60,6 +65,11 @@ class _LoginPageState extends State<LoginPage> {
         ),
         cookiePath: cookieDir,
       );
+      await AuthManager.instance.registerApi(_api!);
+
+      if (widget.skipTokenAutoLogin) {
+        return;
+      }
 
       if (mounted) {
         setState(() {
@@ -69,6 +79,8 @@ class _LoginPageState extends State<LoginPage> {
       }
       final user = await AuthManager.instance.tryAutoLogin(_api!);
       if (user != null) {
+        AuthManager.instance.resetRecoveryState();
+        SessionGuard.instance.resetLoginRequired();
         await _bootstrapAfterAuthenticated(_api!, user);
         return;
       }
@@ -145,6 +157,8 @@ class _LoginPageState extends State<LoginPage> {
         secondary: loginSuccess,
       );
       await AuthManager.instance.captureSessionTokenFromCurrentSession(api);
+      AuthManager.instance.resetRecoveryState();
+      SessionGuard.instance.resetLoginRequired();
       _setMessage('登录成功，正在预加载缓存...', isError: false);
 
       await _bootstrapAfterAuthenticated(api, user);
@@ -201,6 +215,10 @@ class _LoginPageState extends State<LoginPage> {
   String _extractFailureText(InvalidResponse? failure) {
     if (failure == null) return '请求失败，未返回错误详情。';
 
+    if (_isRiskControlFailure(failure)) {
+      return _riskControlMessage;
+    }
+
     final responseData = failure.response?.data;
     if (responseData is Map<String, dynamic>) {
       final errorMap = responseData['error'];
@@ -213,6 +231,10 @@ class _LoginPageState extends State<LoginPage> {
     }
 
     return failure.error.toString();
+  }
+
+  bool _isRiskControlFailure(InvalidResponse failure) {
+    return failure.response?.statusCode == 429;
   }
 
   Future<void> _bootstrapAfterAuthenticated(
