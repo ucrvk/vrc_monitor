@@ -1,6 +1,5 @@
 import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/auth_manager.dart';
 import 'package:vrc_monitor/services/auth_vault.dart';
@@ -55,15 +54,12 @@ class _LoginPageState extends State<LoginPage> {
         _passwordController.clear();
       }
 
-      final supportDir = await getApplicationSupportDirectory();
-      final cookieDir = '${supportDir.path}/vrchat_cookies';
       _api = VrchatDart(
         userAgent: const VrchatUserAgent(
           applicationName: 'vrc-monitor',
           version: '1.0.0',
           contactInfo: 'contact@vrc-monitor.app',
         ),
-        cookiePath: cookieDir,
       );
       await AuthManager.instance.registerApi(_api!);
 
