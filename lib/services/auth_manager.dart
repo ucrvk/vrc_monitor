@@ -14,9 +14,12 @@ class AuthManager {
   static final AuthManager instance = AuthManager._();
 
   static const _cookieHeader = 'Cookie';
+  static const _cookieHeaderLower = 'cookie';
   static const _skipRecoveryKey = 'skipAuthRecovery';
   static const _retryAttemptedKey = 'authRetryAttempted';
   static const _credentialRetryAttemptedKey = 'credentialRetryAttempted';
+  static const _requestHasStoredTwoFactorKey = 'requestHasStoredTwoFactor';
+  static const _twoFactorAuthCookie = 'twoFactorAuth';
   static const _rotationNotice = '检测到会话失效，已自动切换到其他登录会话';
 
   final Expando<bool> _registeredApis = Expando<bool>(
@@ -27,6 +30,32 @@ class AuthManager {
 
   bool get isLoginRequiredIssued => _loginRequiredIssued;
 
+  static String? buildCookieHeaderForTest({
+    String? authToken,
+    String? twoFactorAuthToken,
+  }) {
+    return instance._buildCookieHeader(
+      authToken: authToken,
+      twoFactorAuthToken: twoFactorAuthToken,
+    );
+  }
+
+  static String? extractCookieValueForTest(String cookieText, String key) {
+    return instance._extractCookieValue(cookieText, key);
+  }
+
+  static bool responseRequiresTwoFactorForTest(dynamic responseData) {
+    return instance._responseRequiresTwoFactor(responseData);
+  }
+
+  static bool shouldInvalidateStoredTwoFactorForTest({
+    required bool hadStoredTwoFactor,
+    required dynamic responseData,
+  }) {
+    return hadStoredTwoFactor &&
+        instance._responseRequiresTwoFactor(responseData);
+  }
+
   void resetRecoveryState() {
     _loginRequiredIssued = false;
   }
@@ -34,6 +63,7 @@ class AuthManager {
   Future<void> registerApi(VrchatDart api) async {
     await _migrateLegacyTokenIfNeeded();
     await _applyActiveToken(api);
+    _disableCookieJar(api);
     if (_registeredApis[api] == true) return;
 
     api.rawApi.dio.interceptors.add(
@@ -45,17 +75,40 @@ class AuthManager {
           }
 
           final token = await AuthVault.instance.readActiveSessionToken();
-          if (token.isNotEmpty) {
-            options.headers[_cookieHeader] = 'auth=$token';
+          var twoFactorToken = '';
+          if (_isLoginFlowRequest(options)) {
+            twoFactorToken = await AuthVault.instance.readTwoFactorAuthToken();
+            if (twoFactorToken.isNotEmpty) {
+              options.extra[_requestHasStoredTwoFactorKey] = true;
+            }
+          }
+
+          final cookie = _buildCookieHeader(
+            authToken: token,
+            twoFactorAuthToken: twoFactorToken,
+          );
+          if (cookie == null) {
+            options.headers.remove(_cookieHeader);
+            options.headers.remove(_cookieHeaderLower);
+          } else {
+            options.headers[_cookieHeader] = cookie;
           }
           handler.next(options);
         },
         onResponse: (response, handler) async {
-          await _captureTokenFromHeaders(
+          final captured = await _captureTokensFromHeaders(
             api,
             response.headers,
             response.requestOptions.headers,
           );
+          if (_shouldInvalidateStoredTwoFactor(
+                response.requestOptions,
+                response.data,
+              ) &&
+              (captured.twoFactorAuthToken == null ||
+                  captured.twoFactorAuthToken!.isEmpty)) {
+            await AuthVault.instance.clearTwoFactorAuthToken();
+          }
           handler.next(response);
         },
         onError: (error, handler) async {
@@ -110,11 +163,22 @@ class AuthManager {
     ValidResponse<dynamic, dynamic>? secondary,
   }) async {
     await registerApi(api);
-    final token =
-        _extractTokenFromValidatedResponse(primary) ??
-        _extractTokenFromValidatedResponse(secondary);
-    if (token == null || token.isEmpty) return;
-    await _persistAndActivateToken(api, token);
+    final first = primary ?? secondary;
+    if (first != null) {
+      await _captureTokensFromHeaders(
+        api,
+        first.response.headers,
+        first.response.requestOptions.headers,
+      );
+    }
+    final second = identical(first, secondary) ? null : secondary;
+    if (second != null) {
+      await _captureTokensFromHeaders(
+        api,
+        second.response.headers,
+        second.response.requestOptions.headers,
+      );
+    }
   }
 
   Future<void> captureSessionTokenFromCurrentSession(VrchatDart api) async {
@@ -123,9 +187,12 @@ class AuthManager {
         .getAuthenticationApi()
         .getCurrentUser(extra: {_skipRecoveryKey: true})
         .validateVrc();
-    final token = _extractTokenFromValidatedResponse(success);
-    if (token == null || token.isEmpty) return;
-    await _persistAndActivateToken(api, token);
+    if (success == null) return;
+    await _captureTokensFromHeaders(
+      api,
+      success.response.headers,
+      success.response.requestOptions.headers,
+    );
   }
 
   Future<void> clearSession(VrchatDart api) async {
@@ -153,10 +220,6 @@ class AuthManager {
 
   Future<void> _applyActiveToken(VrchatDart api) async {
     final token = await AuthVault.instance.readActiveSessionToken();
-    if (token.isEmpty) {
-      _clearSessionCookie(api);
-      return;
-    }
     _applySessionCookie(api, token);
   }
 
@@ -209,16 +272,20 @@ class AuthManager {
     final (success, _) = await api.rawApi
         .getAuthenticationApi()
         .getCurrentUser(
-          headers: {_cookieHeader: 'auth=$normalized'},
+          headers: {_cookieHeader: _buildCookieHeader(authToken: normalized)!},
           extra: {_skipRecoveryKey: true},
         )
         .validateVrc();
     if (success == null) return null;
 
-    await _persistAndActivateToken(
+    await _captureTokensFromHeaders(
       api,
-      _extractTokenFromValidatedResponse(success) ?? normalized,
+      success.response.headers,
+      success.response.requestOptions.headers,
     );
+    if ((await AuthVault.instance.readActiveSessionToken()).isEmpty) {
+      await _persistAndActivateToken(api, normalized);
+    }
     return success.data;
   }
 
@@ -229,7 +296,7 @@ class AuthManager {
     final (success, _) = await api.rawApi
         .getAuthenticationApi()
         .verifyAuthToken(
-          headers: {_cookieHeader: 'auth=$normalized'},
+          headers: {_cookieHeader: _buildCookieHeader(authToken: normalized)!},
           extra: {_skipRecoveryKey: true},
         )
         .validateVrc();
@@ -244,12 +311,25 @@ class AuthManager {
     final username = (await vault.readUsername()).trim();
     final password = await vault.readPassword();
     if (username.isEmpty || password.isEmpty) return null;
+    final storedTwoFactor = await vault.readTwoFactorAuthToken();
 
     final (loginSuccess, _) = await api.auth.login(
       username: username,
       password: password,
     );
-    if (loginSuccess == null || loginSuccess.data.requiresTwoFactorAuth) {
+    if (loginSuccess == null) {
+      return null;
+    }
+    if (loginSuccess.data.requiresTwoFactorAuth) {
+      if (storedTwoFactor.isNotEmpty) {
+        final requestCookie = _extractCookieValueFromRequestHeaders(
+          loginSuccess.response.requestOptions.headers,
+          _twoFactorAuthCookie,
+        );
+        if (requestCookie == storedTwoFactor) {
+          await vault.clearTwoFactorAuthToken();
+        }
+      }
       return null;
     }
 
@@ -280,16 +360,35 @@ class AuthManager {
     _applySessionCookie(api, normalized);
   }
 
-  Future<void> _captureTokenFromHeaders(
+  Future<_CapturedCookies> _captureTokensFromHeaders(
     VrchatDart api,
     Headers? headers,
     Map<String, dynamic>? requestHeaders,
   ) async {
-    final token =
-        _extractAuthTokenFromHeaders(headers) ??
-        _extractAuthTokenFromRequestHeaders(requestHeaders);
-    if (token == null || token.isEmpty) return;
-    await _persistAndActivateToken(api, token);
+    final authToken =
+        _extractCookieValueFromSetCookieHeaders(headers, 'auth') ??
+        _extractCookieValueFromRequestHeaders(requestHeaders, 'auth');
+    if (authToken != null && authToken.isNotEmpty) {
+      await _persistAndActivateToken(api, authToken);
+    }
+
+    final twoFactorToken =
+        _extractCookieValueFromSetCookieHeaders(
+          headers,
+          _twoFactorAuthCookie,
+        ) ??
+        _extractCookieValueFromRequestHeaders(
+          requestHeaders,
+          _twoFactorAuthCookie,
+        );
+    if (twoFactorToken != null && twoFactorToken.isNotEmpty) {
+      await AuthVault.instance.writeTwoFactorAuthToken(twoFactorToken);
+    }
+
+    return _CapturedCookies(
+      authToken: authToken,
+      twoFactorAuthToken: twoFactorToken,
+    );
   }
 
   bool _shouldHandleUnauthorized(DioException error) {
@@ -317,7 +416,7 @@ class AuthManager {
     _recoveryCompleter = completer;
     try {
       final currentToken =
-          _extractAuthTokenFromRequestHeaders(request.headers) ??
+          _extractCookieValueFromRequestHeaders(request.headers, 'auth') ??
           await AuthVault.instance.readActiveSessionToken();
 
       if (currentToken.isNotEmpty && await _verifyToken(api, currentToken)) {
@@ -386,7 +485,7 @@ class AuthManager {
         ...request.headers,
         if (await AuthVault.instance.readActiveSessionToken() case final token
             when token.isNotEmpty)
-          _cookieHeader: 'auth=$token',
+          _cookieHeader: _buildCookieHeader(authToken: token),
       },
       extra: nextExtra,
     );
@@ -410,52 +509,106 @@ class AuthManager {
   }
 
   void _applySessionCookie(VrchatDart api, String token) {
-    api.rawApi.dio.options.headers[_cookieHeader] = 'auth=$token';
+    final cookie = _buildCookieHeader(authToken: token);
+    if (cookie == null) {
+      _clearSessionCookie(api);
+      return;
+    }
+    api.rawApi.dio.options.headers[_cookieHeader] = cookie;
   }
 
   void _clearSessionCookie(VrchatDart api) {
     api.rawApi.dio.options.headers.remove(_cookieHeader);
+    api.rawApi.dio.options.headers.remove(_cookieHeaderLower);
   }
 
-  String? _extractTokenFromValidatedResponse(
-    ValidResponse<dynamic, dynamic>? response,
+  bool _isLoginFlowRequest(RequestOptions options) {
+    final normalizedPath = _normalizePath(options.path);
+    return normalizedPath == '/auth/user' ||
+        normalizedPath.startsWith('/auth/twofactorauth/');
+  }
+
+  bool _shouldInvalidateStoredTwoFactor(
+    RequestOptions options,
+    dynamic responseData,
   ) {
-    if (response == null) return null;
-    return _extractAuthTokenFromHeaders(response.response.headers) ??
-        _extractAuthTokenFromRequestHeaders(
-          response.response.requestOptions.headers,
-        );
+    final hadStoredToken = options.extra[_requestHasStoredTwoFactorKey] == true;
+    if (!hadStoredToken) return false;
+    return _responseRequiresTwoFactor(responseData);
   }
 
-  String? _extractAuthTokenFromHeaders(Headers? headers) {
-    if (headers == null) return null;
+  bool _responseRequiresTwoFactor(dynamic responseData) {
+    if (responseData is! Map) return false;
+    final raw = responseData['requiresTwoFactorAuth'];
+    return raw is List && raw.isNotEmpty;
+  }
 
+  void _disableCookieJar(VrchatDart api) {
+    api.rawApi.dio.interceptors.removeWhere(
+      (interceptor) =>
+          interceptor.runtimeType.toString().contains('CookieManager'),
+    );
+  }
+
+  String _normalizePath(String path) {
+    final maybeUri = Uri.tryParse(path);
+    final normalized = (maybeUri?.path ?? path).trim().toLowerCase();
+    return normalized.isEmpty ? '/' : normalized;
+  }
+
+  String? _buildCookieHeader({String? authToken, String? twoFactorAuthToken}) {
+    final parts = <String>[
+      if ((authToken ?? '').trim().isNotEmpty) 'auth=${authToken!.trim()}',
+      if ((twoFactorAuthToken ?? '').trim().isNotEmpty)
+        '$_twoFactorAuthCookie=${twoFactorAuthToken!.trim()}',
+    ];
+    if (parts.isEmpty) return null;
+    return parts.join('; ');
+  }
+
+  String? _extractCookieValueFromSetCookieHeaders(
+    Headers? headers,
+    String key,
+  ) {
+    if (headers == null) return null;
     final setCookies = <String>[
       ...?headers.map['set-cookie'],
       ...?headers.map['Set-Cookie'],
     ];
-
     for (final cookie in setCookies) {
-      final match = RegExp(r'(^|;\s*)auth=([^;]+)').firstMatch(cookie);
-      if (match != null) {
-        return match.group(2);
+      final token = _extractCookieValue(cookie, key);
+      if (token != null && token.isNotEmpty) {
+        return token;
       }
     }
     return null;
   }
 
-  String? _extractAuthTokenFromRequestHeaders(Map<String, dynamic>? headers) {
+  String? _extractCookieValueFromRequestHeaders(
+    Map<String, dynamic>? headers,
+    String key,
+  ) {
     if (headers == null) return null;
-
-    final cookieHeader = headers[_cookieHeader] ?? headers['cookie'];
+    final cookieHeader = headers[_cookieHeader] ?? headers[_cookieHeaderLower];
     if (cookieHeader == null) return null;
-
     final cookieText = switch (cookieHeader) {
       String value => value,
       List value => value.join('; '),
       _ => cookieHeader.toString(),
     };
-    final match = RegExp(r'(^|;\s*)auth=([^;]+)').firstMatch(cookieText);
-    return match?.group(2);
+    return _extractCookieValue(cookieText, key);
   }
+
+  String? _extractCookieValue(String cookieText, String key) {
+    final pattern = RegExp('(^|;\\s*)${RegExp.escape(key)}=([^;]+)');
+    final match = pattern.firstMatch(cookieText);
+    return match?.group(2)?.trim();
+  }
+}
+
+class _CapturedCookies {
+  const _CapturedCookies({this.authToken, this.twoFactorAuthToken});
+
+  final String? authToken;
+  final String? twoFactorAuthToken;
 }

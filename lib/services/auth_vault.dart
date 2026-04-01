@@ -14,6 +14,7 @@ class AuthVault {
   static const _kSessionToken = 'session_token';
   static const _kSessionTokenPool = 'session_token_pool';
   static const _kActiveSessionToken = 'active_session_token';
+  static const _kTwoFactorAuthToken = 'two_factor_auth_token';
   static const _kForceAutoLogin = 'force_auto_login';
 
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
@@ -121,6 +122,23 @@ class AuthVault {
     await _secureStorage.delete(key: _kSessionTokenPool);
     await _secureStorage.delete(key: _kActiveSessionToken);
     await _secureStorage.delete(key: _kSessionToken);
+  }
+
+  Future<String> readTwoFactorAuthToken() async {
+    return (await _secureStorage.read(key: _kTwoFactorAuthToken)) ?? '';
+  }
+
+  Future<void> writeTwoFactorAuthToken(String token) async {
+    final normalized = token.trim();
+    if (normalized.isEmpty) {
+      await _secureStorage.delete(key: _kTwoFactorAuthToken);
+      return;
+    }
+    await _secureStorage.write(key: _kTwoFactorAuthToken, value: normalized);
+  }
+
+  Future<void> clearTwoFactorAuthToken() async {
+    await _secureStorage.delete(key: _kTwoFactorAuthToken);
   }
 
   Future<bool> readForceAutoLogin() async {

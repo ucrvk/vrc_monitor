@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -413,9 +413,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
           final privateRoomFriendCount = _countPrivateRoomFriends();
           if (rooms.isEmpty) {
             return Center(
-              child: Text(
-                '暂无可显示的在线房间\n您还有$privateRoomFriendCount个好友在私人房间',
-              ),
+              child: Text('暂无可显示的在线房间\n您还有$privateRoomFriendCount个好友在私人房间'),
             );
           }
           return ListView(
@@ -794,6 +792,11 @@ class _RoomCard extends StatelessWidget {
     final roomType = room.roomTypeLabel?.trim();
     final isPublicRoom = (roomType ?? '').toLowerCase() == 'public';
     final ownerLabel = room.ownerName.isEmpty ? 'Unknown' : room.ownerName;
+    final ownerUserId = room.ownerUserId;
+    final ownerClickable =
+        ownerUserId != null &&
+        ownerUserId.isNotEmpty &&
+        ownerLabel.toLowerCase() != 'unknown';
 
     return Card(
       child: Column(
@@ -821,10 +824,43 @@ class _RoomCard extends StatelessWidget {
                   ),
                   if (!isPublicRoom) ...[
                     const SizedBox(height: 6),
-                    Text(
-                      '房主: $ownerLabel',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
+                    if (ownerClickable)
+                      InkWell(
+                        onTap: () => unawaited(onTapFriend(ownerUserId)),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Text.rich(
+                            TextSpan(
+                              text: '房主: ',
+                              children: [
+                                TextSpan(
+                                  text: ownerLabel,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                      )
+                    else
+                      Text.rich(
+                        TextSpan(
+                          text: '房主: ',
+                          children: [
+                            TextSpan(
+                              text: ownerLabel,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
                   ],
                 ],
                 const SizedBox(height: 10),
@@ -1085,4 +1121,3 @@ class _SelfLocationState {
   final String? travelingText;
   final String? travelingWorldId;
 }
-

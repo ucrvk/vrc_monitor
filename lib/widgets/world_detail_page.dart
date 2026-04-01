@@ -68,6 +68,10 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
           .getInstance(worldId: widget.worldId, instanceId: _fullInstanceId)
           .validateVrc();
       instance = success?.data;
+      final ownerUserId = _instanceOwnerUserId(instance);
+      if (ownerUserId != null && _userStore.getUser(ownerUserId) == null) {
+        unawaited(_userStore.loadUser(ownerUserId, widget.api));
+      }
       if (instance == null && failure != null) {
         errorMessage = failure.error.toString();
       }
@@ -101,10 +105,10 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
           .validateVrc();
       if (!mounted) return;
       if (success == null) {
-        final message = failure?.error ?? '未知错误';
+        final message = failure?.error ?? '鏈煡閿欒';
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('邀请失败: $message')));
+        ).showSnackBar(SnackBar(content: Text('閭€璇峰け璐? $message')));
       } else {
         ScaffoldMessenger.of(
           context,
@@ -114,7 +118,7 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('邀请失败: $e')));
+      ).showSnackBar(SnackBar(content: Text('閭€璇峰け璐? $e')));
     } finally {
       if (mounted) {
         setState(() {
@@ -180,6 +184,8 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
             final actualRoomId = (instance?.displayName?.isNotEmpty ?? false)
                 ? instance!.displayName!
                 : instance!.name;
+            final ownerUserId = _instanceOwnerUserId(instance);
+            final ownerName = _resolveOwnerName(ownerUserId);
             final description = world?.description.trim() ?? '';
             final currentUsers = instance.nUsers;
             final totalUsers = instance.capacity ?? world?.capacity;
@@ -224,13 +230,68 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      '$roomRegionEmoji $roomTypeLabel · #$actualRoomId',
+                                      '$roomRegionEmoji $roomTypeLabel  #$actualRoomId',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: Theme.of(
                                         context,
                                       ).textTheme.bodyMedium,
                                     ),
+                                    if (ownerName != null) ...[
+                                      const SizedBox(height: 2),
+                                      if (ownerUserId != null)
+                                        InkWell(
+                                          onTap: () => _openFriendDetailPage(
+                                            ownerUserId,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 2,
+                                            ),
+                                            child: Text.rich(
+                                              TextSpan(
+                                                text: '房主: ',
+                                                children: [
+                                                  TextSpan(
+                                                    text: ownerName,
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.bodySmall,
+                                            ),
+                                          ),
+                                        )
+                                      else
+                                        Text.rich(
+                                          TextSpan(
+                                            text: '房主: ',
+                                            children: [
+                                              TextSpan(
+                                                text: ownerName,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall,
+                                        ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -384,22 +445,40 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
   }
 
   String _instanceRegionEmoji(Instance? instance) {
-    final regionCode =
-        (instance?.region.name ?? instance?.photonRegion.name ?? '')
-            .toLowerCase();
-    switch (regionCode) {
-      case 'jp':
-        return '🇯🇵';
-      case 'eu':
-        return '🇪🇺';
-      case 'us':
-      case 'use':
-      case 'usw':
-      case 'usx':
-        return '🇺🇸';
-      default:
-        return '🌐';
+  final regionCode =
+      (instance?.region.name ?? instance?.photonRegion.name ?? '')
+          .toLowerCase();
+
+  switch (regionCode) {
+    case 'jp':
+      return '🇯🇵';
+    case 'eu':
+      return '🇪🇺'; // 或者用 🇪🇺（欧盟）
+    case 'us':
+    case 'use': // US East
+    case 'usw': // US West
+    case 'usx': // 其他 US
+      return '🇺🇸';
+    default:
+      return '🌍';
+  }
+}
+
+  String? _instanceOwnerUserId(Instance? instance) {
+    final ownerId = instance?.ownerId?.trim() ?? '';
+    if (ownerId.startsWith('usr_')) {
+      return ownerId;
     }
+    return null;
+  }
+
+  String? _resolveOwnerName(String? ownerUserId) {
+    if (ownerUserId == null || ownerUserId.isEmpty) return null;
+    final user = _userStore.getUser(ownerUserId);
+    if (user != null) return user.displayName;
+    final limited = _userStore.getLimitedUser(ownerUserId);
+    if (limited != null) return limited.displayName;
+    return ownerUserId;
   }
 }
 

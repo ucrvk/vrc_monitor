@@ -1,6 +1,5 @@
 import 'package:dio_response_validator/dio_response_validator.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/auth_manager.dart';
 import 'package:vrc_monitor/services/auth_vault.dart';
@@ -9,6 +8,8 @@ import 'package:vrc_monitor/services/session_guard.dart';
 import 'package:vrc_monitor/services/user_store.dart';
 import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/widgets/main_shell.dart';
+
+enum _TwoFactorMode { emailOtp, otpTotp }
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, this.skipTokenAutoLogin = false});
@@ -21,6 +22,10 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   static const String _riskControlMessage = '登录流程被风控系统拦截，请检查您的安全设备(通常是邮件来解决)';
+  static final RegExp _sixDigitCodePattern = RegExp(r'^\d{6}$');
+  static final RegExp _recoveryCodePattern = RegExp(
+    r'^[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}$',
+  );
 
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -55,15 +60,12 @@ class _LoginPageState extends State<LoginPage> {
         _passwordController.clear();
       }
 
-      final supportDir = await getApplicationSupportDirectory();
-      final cookieDir = '${supportDir.path}/vrchat_cookies';
       _api = VrchatDart(
         userAgent: const VrchatUserAgent(
           applicationName: 'vrc-monitor',
           version: '1.0.0',
           contactInfo: 'contact@vrc-monitor.app',
         ),
-        cookiePath: cookieDir,
       );
       await AuthManager.instance.registerApi(_api!);
 
@@ -120,7 +122,7 @@ class _LoginPageState extends State<LoginPage> {
         username: _usernameController.text.trim(),
         password: _passwordController.text,
       );
-      ValidResponse<dynamic, AuthResponse>? twoFactorSuccess;
+      ValidResponse<dynamic, dynamic>? twoFactorSuccess;
 
       if (loginSuccess == null) {
         _setMessage(_extractFailureText(loginFailure), isError: true);
@@ -129,19 +131,50 @@ class _LoginPageState extends State<LoginPage> {
 
       final authResponse = loginSuccess.data;
       if (authResponse.requiresTwoFactorAuth) {
-        final otpCode = await _showOtpDialog();
+        final twoFactorMode = _resolveTwoFactorMode(authResponse);
+        if (twoFactorMode == null) {
+          _setMessage('当前账户的 2FA 类型暂不受支持。', isError: true);
+          return;
+        }
+
+        final twoFactorCode = await _showTwoFactorDialog(twoFactorMode);
         if (!mounted) return;
-        if (otpCode == null || otpCode.isEmpty) {
+        if (twoFactorCode == null || twoFactorCode.isEmpty) {
           _setMessage('已取消 OTP 验证。', isError: true);
           return;
         }
 
-        final (otpSuccess, otpFailure) = await api.auth.verify2fa(otpCode);
+        final validationMessage = _validateTwoFactorCode(
+          twoFactorMode,
+          twoFactorCode,
+        );
+        if (validationMessage != null) {
+          _setMessage(validationMessage, isError: true);
+          return;
+        }
+
+        final normalizedCode = _normalizeTwoFactorCode(twoFactorCode);
+        final (otpSuccess, otpFailure) = await _verifyTwoFactorCode(
+          api,
+          mode: twoFactorMode,
+          code: normalizedCode,
+        );
         if (otpSuccess == null) {
           _setMessage(_extractFailureText(otpFailure), isError: true);
           return;
         }
+
         twoFactorSuccess = otpSuccess;
+
+        final (refreshSuccess, refreshFailure) = await api.auth.login();
+        if (refreshSuccess == null) {
+          _setMessage(_extractFailureText(refreshFailure), isError: true);
+          return;
+        }
+        if (refreshSuccess.data.requiresTwoFactorAuth) {
+          _setMessage('二次验证完成后仍需 2FA，请重试。', isError: true);
+          return;
+        }
       }
 
       final user = api.auth.currentUser;
@@ -173,21 +206,86 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  Future<String?> _showOtpDialog() async {
+  _TwoFactorMode? _resolveTwoFactorMode(AuthResponse authResponse) {
+    final types = authResponse.twoFactorAuthTypes.toSet();
+    if (types.length == 1 && types.contains(TwoFactorAuthType.emailOtp)) {
+      return _TwoFactorMode.emailOtp;
+    }
+    if (types.length == 2 &&
+        types.contains(TwoFactorAuthType.otp) &&
+        types.contains(TwoFactorAuthType.totp)) {
+      return _TwoFactorMode.otpTotp;
+    }
+    return null;
+  }
+
+  String? _validateTwoFactorCode(_TwoFactorMode mode, String code) {
+    if (mode == _TwoFactorMode.emailOtp) {
+      return _sixDigitCodePattern.hasMatch(code) ? null : '请输入 6 位邮箱验证码。';
+    }
+
+    if (_sixDigitCodePattern.hasMatch(code) ||
+        _recoveryCodePattern.hasMatch(code)) {
+      return null;
+    }
+    return '请输入 6 位验证码，或形如 xxxx-xxxx 的 Recovery Code。';
+  }
+
+  String _normalizeTwoFactorCode(String code) {
+    final trimmed = code.trim();
+    if (_recoveryCodePattern.hasMatch(trimmed)) {
+      return trimmed.toLowerCase();
+    }
+    return trimmed;
+  }
+
+  Future<(ValidResponse<dynamic, dynamic>?, InvalidResponse?)>
+  _verifyTwoFactorCode(
+    VrchatDart api, {
+    required _TwoFactorMode mode,
+    required String code,
+  }) async {
+    if (mode == _TwoFactorMode.emailOtp) {
+      return api.rawApi
+          .getAuthenticationApi()
+          .verify2FAEmailCode(
+            twoFactorEmailCode: TwoFactorEmailCode(code: code),
+          )
+          .validateVrc();
+    }
+
+    if (_sixDigitCodePattern.hasMatch(code)) {
+      return api.auth.verify2fa(code);
+    }
+
+    if (_recoveryCodePattern.hasMatch(code)) {
+      return api.rawApi
+          .getAuthenticationApi()
+          .verifyRecoveryCode(twoFactorAuthCode: TwoFactorAuthCode(code: code))
+          .validateVrc();
+    }
+
+    return (null, null);
+  }
+
+  Future<String?> _showTwoFactorDialog(_TwoFactorMode mode) async {
     var otpCode = '';
+    final isEmailOtp = mode == _TwoFactorMode.emailOtp;
     return showDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('输入 OTP'),
+          title: Text(isEmailOtp ? '输入邮箱验证码' : '输入 2FA 验证码'),
           content: TextField(
             autofocus: true,
-            keyboardType: TextInputType.number,
+            keyboardType: isEmailOtp
+                ? TextInputType.number
+                : TextInputType.text,
             onChanged: (value) => otpCode = value.trim(),
-            decoration: const InputDecoration(
-              labelText: '验证码',
-              hintText: '请输入 OTP',
+            decoration: InputDecoration(
+              labelText: isEmailOtp ? '邮箱验证码' : '验证码 / Recovery Code',
+              hintText: isEmailOtp ? '请输入 6 位邮箱验证码' : '请输入 123456 或 xxxx-xxxx',
             ),
           ),
           actions: [
