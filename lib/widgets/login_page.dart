@@ -21,7 +21,7 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  static const String _riskControlMessage = '登录流程被风控系统拦截，请检查您的安全设备(通常是邮件来解决)';
+  static const String _riskControlMessage = '登录流程被风控系统拦截，请检查您的安全设备(通常是邮件)来解决';
   static final RegExp _sixDigitCodePattern = RegExp(r'^\d{6}$');
   static final RegExp _recoveryCodePattern = RegExp(
     r'^[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}$',
