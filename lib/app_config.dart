@@ -11,7 +11,7 @@ class AppConfig {
   static const AppConfig fallback = AppConfig(
     githubPage: 'https://github.com/ucrvk/vrc_monitor',
     branch: 'beta',
-    updateManagerBaseUrl: null,
+    updateManagerBaseUrl: "https://69ce488b001f9010ee69.fra.appwrite.run/",
   );
 
   final String githubPage;
