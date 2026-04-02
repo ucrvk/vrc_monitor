@@ -159,6 +159,7 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   void _handleUserStoreChanged() {
+    _buildFavoriteGroupsFromStore();
     unawaited(_resolveLocationsForOnlineFriends());
   }
 
