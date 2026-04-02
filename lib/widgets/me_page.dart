@@ -234,8 +234,11 @@ class _MePageState extends State<MePage> {
                   subtitle: Text(
                     _safeText(_currentUser.pronouns, fallback: '未设定'),
                   ),
-                  trailing: const Icon(Icons.edit_outlined),
-                  onTap: _saving ? null : _editPronouns,
+                  trailing: IconButton(
+                    tooltip: '编辑称谓',
+                    onPressed: _saving ? null : _editPronouns,
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
                 ),
                 const Divider(height: 1),
                 ListTile(
@@ -243,16 +246,22 @@ class _MePageState extends State<MePage> {
                   title: const Text('个人简介'),
                   subtitle: _buildBioSubtitle(),
                   isThreeLine: _bioExpanded,
-                  trailing: const Icon(Icons.edit_outlined),
-                  onTap: _saving ? null : _editBio,
+                  trailing: IconButton(
+                    tooltip: '编辑个人简介',
+                    onPressed: _saving ? null : _editBio,
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
                 ),
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.circle_notifications_outlined),
                   title: const Text('状态'),
                   subtitle: Text(_statusSummary(_currentUser)),
-                  trailing: const Icon(Icons.edit_outlined),
-                  onTap: _saving ? null : _editStatus,
+                  trailing: IconButton(
+                    tooltip: '编辑状态',
+                    onPressed: _saving ? null : _editStatus,
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
                 ),
               ],
             ),
@@ -310,17 +319,23 @@ class _MePageState extends State<MePage> {
           maxLines: _bioExpanded ? null : 4,
           overflow: _bioExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
         ),
-        const SizedBox(height: 4),
-        GestureDetector(
-          onTap: () {
-            setState(() {
-              _bioExpanded = !_bioExpanded;
-            });
-          },
-          behavior: HitTestBehavior.opaque,
-          child: Text(
-            _bioExpanded ? '收起' : '展开',
-            style: TextStyle(color: Theme.of(context).colorScheme.primary),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: IconButton(
+            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            tooltip: _bioExpanded ? '收起简介' : '展开简介',
+            onPressed: () {
+              setState(() {
+                _bioExpanded = !_bioExpanded;
+              });
+            },
+            icon: Icon(
+              _bioExpanded
+                  ? Icons.keyboard_arrow_up
+                  : Icons.keyboard_arrow_down,
+            ),
           ),
         ),
       ],
