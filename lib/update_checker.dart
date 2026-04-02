@@ -49,7 +49,9 @@ class AppUpdateChecker {
   final Future<SharedPreferences> Function() _prefsProvider;
   final Future<String?> Function() _abiResolver;
 
-  Future<AppUpdateInfo?> checkForUpdate() async {
+  Future<AppUpdateInfo?> checkForUpdate({
+    bool respectIgnoredVersion = true,
+  }) async {
     try {
       final localVersion = await _localVersionLoader();
       final config = await _configLoader();
@@ -83,7 +85,9 @@ class AppUpdateChecker {
 
       final prefs = await _prefsProvider();
       final ignoredVersion = prefs.getString(_ignoredVersionKey);
-      if (!force && ignoredVersion == latestVersion) return null;
+      if (respectIgnoredVersion && !force && ignoredVersion == latestVersion) {
+        return null;
+      }
 
       return AppUpdateInfo(
         latestVersion: latestVersion,

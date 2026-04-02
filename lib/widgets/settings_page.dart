@@ -138,7 +138,9 @@ class _SettingsPageState extends State<SettingsPage> {
       _checkingUpdate = true;
     });
     try {
-      final info = await _updateChecker.checkForUpdate();
+      final info = await _updateChecker.checkForUpdate(
+        respectIgnoredVersion: false,
+      );
       if (!mounted) return;
       if (info == null) {
         ScaffoldMessenger.of(
