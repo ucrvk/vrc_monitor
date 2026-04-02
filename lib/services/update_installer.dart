@@ -10,7 +10,11 @@ class UpdateInstaller {
     'top.wenwen12305.monitor/update_installer',
   );
 
-  Future<bool> downloadAndInstallApk(String url) async {
+  Future<bool> downloadAndInstallApk(
+    String url, {
+    int? expectedTotalBytes,
+    void Function(int receivedBytes, int totalBytes)? onProgress,
+  }) async {
     if (!Platform.isAndroid) return false;
 
     final trimmedUrl = url.trim();
@@ -23,6 +27,10 @@ class UpdateInstaller {
       trimmedUrl,
       apkPath,
       options: WebClient.withUserAgent(responseType: ResponseType.bytes),
+      onReceiveProgress: (received, total) {
+        final resolvedTotal = total > 0 ? total : (expectedTotalBytes ?? total);
+        onProgress?.call(received, resolvedTotal);
+      },
     );
 
     final installed = await _channel.invokeMethod<bool>(

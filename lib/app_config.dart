@@ -27,7 +27,7 @@ class AppConfig {
     final base = updateManagerBaseUrl?.trim() ?? '';
     if (base.isEmpty) return null;
     final normalized = base.replaceFirst(RegExp(r'/+$'), '');
-    return Uri.tryParse('$normalized/config.json');
+    return Uri.tryParse(normalized);
   }
 
   Uri releaseUrlForVersion(String version) {

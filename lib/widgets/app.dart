@@ -85,15 +85,15 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
               child: const Text('取消（不再提示）'),
             ),
             FilledButton(
-              onPressed: () async {
-                final launched = await _handleUpdateAction(info);
-                if (context.mounted && launched) {
-                  Navigator.of(context).pop();
-                }
-              },
-              child: Text(
-                info.downloadLink.trim().isEmpty ? '前往 GitHub 更新' : '下载并安装',
-              ),
+              onPressed: _canHandleUpdateAction(info)
+                  ? () async {
+                      final launched = await _handleUpdateAction(info);
+                      if (context.mounted && launched) {
+                        Navigator.of(context).pop();
+                      }
+                    }
+                  : null,
+              child: Text(_updateActionLabel(info)),
             ),
           ],
         );
@@ -126,15 +126,28 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
               child: const Text('退出'),
             ),
             FilledButton(
-              onPressed: () async {
-                await _handleUpdateAction(info);
-              },
-              child: Text(info.downloadLink.trim().isEmpty ? '前往更新' : '下载并安装'),
+              onPressed: _canHandleUpdateAction(info)
+                  ? () async {
+                      await _handleUpdateAction(info);
+                    }
+                  : null,
+              child: Text(_updateActionLabel(info)),
             ),
           ],
         );
       },
     );
+  }
+
+  bool _canHandleUpdateAction(AppUpdateInfo info) {
+    if (info.downloadLink.trim().isNotEmpty) return true;
+    return info.sourceType == UpdateSourceType.github;
+  }
+
+  String _updateActionLabel(AppUpdateInfo info) {
+    if (info.downloadLink.trim().isNotEmpty) return '下载并安装';
+    if (info.sourceType == UpdateSourceType.github) return '前往 GitHub 更新';
+    return '暂无下载地址';
   }
 
   Future<bool> _handleUpdateAction(AppUpdateInfo info) async {
@@ -143,7 +156,8 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
       final downloadUri = Uri.tryParse(downloadLink);
       if (downloadUri == null) return false;
       try {
-        final installed = await _updateInstaller.downloadAndInstallApk(
+        final installed = await _downloadAndInstallWithProgress(
+          info,
           downloadLink,
         );
         if (installed) return true;
@@ -153,9 +167,96 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
       return launchUrl(downloadUri, mode: LaunchMode.externalApplication);
     }
 
+    if (info.sourceType == UpdateSourceType.updateManager) {
+      _showLaunchFailedMessage('更新源未提供下载地址，请稍后重试。');
+      return false;
+    }
+
     return launchUrl(
       await _updateChecker.releaseUrlForVersion(info.latestVersion),
       mode: LaunchMode.externalApplication,
+    );
+  }
+
+  Future<bool> _downloadAndInstallWithProgress(
+    AppUpdateInfo info,
+    String downloadLink,
+  ) async {
+    final dialogContext = AppNavigator.navigatorKey.currentContext;
+    if (dialogContext == null) {
+      return _updateInstaller.downloadAndInstallApk(
+        downloadLink,
+        expectedTotalBytes: info.sizeOriginal,
+      );
+    }
+
+    final progress = ValueNotifier<_DownloadProgress>(
+      const _DownloadProgress(receivedBytes: 0, totalBytes: null),
+    );
+    showDialog<void>(
+      context: dialogContext,
+      barrierDismissible: false,
+      builder: (dialogCtx) => ValueListenableBuilder<_DownloadProgress>(
+        valueListenable: progress,
+        builder: (buildContext, value, child) {
+          final total = value.totalBytes;
+          final fraction = total == null || total <= 0
+              ? null
+              : value.receivedBytes / total;
+          final percentText = fraction == null
+              ? '下载中...'
+              : '下载中 ${(fraction * 100).clamp(0, 100).toStringAsFixed(1)}%';
+          return AlertDialog(
+            title: const Text('正在下载更新'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(value: fraction),
+                const SizedBox(height: 12),
+                Text(
+                  '$percentText\n${_formatBytes(value.receivedBytes)}'
+                  '${total == null ? '' : ' / ${_formatBytes(total)}'}',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    try {
+      return await _updateInstaller.downloadAndInstallApk(
+        downloadLink,
+        expectedTotalBytes: info.sizeOriginal,
+        onProgress: (receivedBytes, totalBytes) {
+          progress.value = _DownloadProgress(
+            receivedBytes: receivedBytes,
+            totalBytes: totalBytes > 0 ? totalBytes : null,
+          );
+        },
+      );
+    } finally {
+      progress.dispose();
+      if (dialogContext.mounted) {
+        Navigator.of(dialogContext, rootNavigator: true).maybePop();
+      }
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    final kb = bytes / 1024;
+    if (kb < 1024) return '${kb.toStringAsFixed(1)} KB';
+    final mb = kb / 1024;
+    if (mb < 1024) return '${mb.toStringAsFixed(1)} MB';
+    final gb = mb / 1024;
+    return '${gb.toStringAsFixed(1)} GB';
+  }
+
+  void _showLaunchFailedMessage(String message) {
+    AppNavigator.scaffoldMessengerKey.currentState?.showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 
@@ -213,4 +314,14 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
       },
     );
   }
+}
+
+class _DownloadProgress {
+  const _DownloadProgress({
+    required this.receivedBytes,
+    required this.totalBytes,
+  });
+
+  final int receivedBytes;
+  final int? totalBytes;
 }

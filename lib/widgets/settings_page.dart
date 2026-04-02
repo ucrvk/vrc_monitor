@@ -165,14 +165,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: const Text('稍后'),
               ),
             FilledButton(
-              onPressed: () async {
-                final navigator = Navigator.of(dialogContext);
-                await _handleUpdateAction(info);
-                if (mounted) {
-                  navigator.pop();
-                }
-              },
-              child: Text(info.downloadLink.trim().isEmpty ? '前往更新' : '下载并安装'),
+              onPressed: _canHandleUpdateAction(info)
+                  ? () async {
+                      final navigator = Navigator.of(dialogContext);
+                      await _handleUpdateAction(info);
+                      if (mounted) {
+                        navigator.pop();
+                      }
+                    }
+                  : null,
+              child: Text(_updateActionLabel(info)),
             ),
           ],
         ),
@@ -270,11 +272,11 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  void _showLaunchFailedMessage() {
+  void _showLaunchFailedMessage([String message = '无法打开链接，请稍后重试。']) {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('无法打开链接，请稍后重试。')));
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   String _updateMessage(AppUpdateInfo info, {required bool force}) {
@@ -286,6 +288,17 @@ class _SettingsPageState extends State<SettingsPage> {
     return '发现新版本 ${info.latestVersion}\n\n更新简介：$message\n\n$tail';
   }
 
+  bool _canHandleUpdateAction(AppUpdateInfo info) {
+    if (info.downloadLink.trim().isNotEmpty) return true;
+    return info.sourceType == UpdateSourceType.github;
+  }
+
+  String _updateActionLabel(AppUpdateInfo info) {
+    if (info.downloadLink.trim().isNotEmpty) return '下载并安装';
+    if (info.sourceType == UpdateSourceType.github) return '前往 GitHub 更新';
+    return '暂无下载地址';
+  }
+
   Future<void> _handleUpdateAction(AppUpdateInfo info) async {
     final downloadLink = info.downloadLink.trim();
     if (downloadLink.isNotEmpty) {
@@ -295,7 +308,8 @@ class _SettingsPageState extends State<SettingsPage> {
         return;
       }
       try {
-        final installed = await _updateInstaller.downloadAndInstallApk(
+        final installed = await _downloadAndInstallWithProgress(
+          info,
           downloadLink,
         );
         if (installed) return;
@@ -310,11 +324,84 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
 
+    if (info.sourceType == UpdateSourceType.updateManager) {
+      _showLaunchFailedMessage('更新源未提供下载地址，请稍后重试。');
+      return;
+    }
+
     final launched = await launchUrl(
       await _updateChecker.releaseUrlForVersion(info.latestVersion),
       mode: LaunchMode.externalApplication,
     );
     if (!launched) _showLaunchFailedMessage();
+  }
+
+  Future<bool> _downloadAndInstallWithProgress(
+    AppUpdateInfo info,
+    String downloadLink,
+  ) async {
+    final progress = ValueNotifier<_DownloadProgress>(
+      const _DownloadProgress(receivedBytes: 0, totalBytes: null),
+    );
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => ValueListenableBuilder<_DownloadProgress>(
+        valueListenable: progress,
+        builder: (buildContext, value, child) {
+          final total = value.totalBytes;
+          final fraction = total == null || total <= 0
+              ? null
+              : value.receivedBytes / total;
+          final percentText = fraction == null
+              ? '下载中...'
+              : '下载中 ${(fraction * 100).clamp(0, 100).toStringAsFixed(1)}%';
+          return AlertDialog(
+            title: const Text('正在下载更新'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(value: fraction),
+                const SizedBox(height: 12),
+                Text(
+                  '$percentText\n${_formatBytes(value.receivedBytes)}'
+                  '${total == null ? '' : ' / ${_formatBytes(total)}'}',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    try {
+      return await _updateInstaller.downloadAndInstallApk(
+        downloadLink,
+        expectedTotalBytes: info.sizeOriginal,
+        onProgress: (receivedBytes, totalBytes) {
+          progress.value = _DownloadProgress(
+            receivedBytes: receivedBytes,
+            totalBytes: totalBytes > 0 ? totalBytes : null,
+          );
+        },
+      );
+    } finally {
+      progress.dispose();
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).maybePop();
+      }
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    final kb = bytes / 1024;
+    if (kb < 1024) return '${kb.toStringAsFixed(1)} KB';
+    final mb = kb / 1024;
+    if (mb < 1024) return '${mb.toStringAsFixed(1)} MB';
+    final gb = mb / 1024;
+    return '${gb.toStringAsFixed(1)} GB';
   }
 
   @override
@@ -489,4 +576,14 @@ class _SettingsPageState extends State<SettingsPage> {
       ThemeMode.dark => '深色',
     };
   }
+}
+
+class _DownloadProgress {
+  const _DownloadProgress({
+    required this.receivedBytes,
+    required this.totalBytes,
+  });
+
+  final int receivedBytes;
+  final int? totalBytes;
 }

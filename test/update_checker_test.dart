@@ -36,7 +36,7 @@ void main() {
     });
 
     test(
-      'uses update manager config.json and parses message/downloadLink',
+      'uses update manager base url and parses message/downloadLink',
       () async {
         final checker = AppUpdateChecker(
           localVersionLoader: () async => '1.0.0',
@@ -49,7 +49,7 @@ void main() {
           publicJsonFetcher: (url) async {
             expect(
               url,
-              'https://updates.example.com/base/config.json?branch=beta&abi=x86_64',
+              'https://updates.example.com/base?branch=beta&abi=x86_64',
             );
             return <String, dynamic>{
               'version': '1.2.0',

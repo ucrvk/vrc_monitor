@@ -15,6 +15,7 @@ class AppUpdateInfo {
     required this.force,
     required this.message,
     required this.downloadLink,
+    required this.sizeOriginal,
     required this.sourceType,
   });
 
@@ -22,6 +23,7 @@ class AppUpdateInfo {
   final bool force;
   final String message;
   final String downloadLink;
+  final int? sizeOriginal;
   final UpdateSourceType sourceType;
 }
 
@@ -79,6 +81,7 @@ class AppUpdateChecker {
       final force = _toBool(payload['force']);
       final message = payload['msg']?.toString().trim() ?? '';
       final downloadLink = payload['downloadLink']?.toString().trim() ?? '';
+      final sizeOriginal = _toPositiveInt(payload['sizeOriginal']);
       if (!_isRemoteVersionNewer(remote: latestVersion, local: localVersion)) {
         return null;
       }
@@ -94,6 +97,7 @@ class AppUpdateChecker {
         force: force,
         message: message,
         downloadLink: downloadLink,
+        sizeOriginal: sizeOriginal,
         sourceType: sourceType,
       );
     } catch (_) {
@@ -139,6 +143,19 @@ class AppUpdateChecker {
     if (value is bool) return value;
     if (value is String) return value.toLowerCase() == 'true';
     return false;
+  }
+
+  int? _toPositiveInt(dynamic value) {
+    if (value is int && value > 0) return value;
+    if (value is num) {
+      final converted = value.toInt();
+      if (converted > 0) return converted;
+    }
+    if (value is String) {
+      final parsed = int.tryParse(value.trim());
+      if (parsed != null && parsed > 0) return parsed;
+    }
+    return null;
   }
 
   bool _isRemoteVersionNewer({required String remote, required String local}) {
