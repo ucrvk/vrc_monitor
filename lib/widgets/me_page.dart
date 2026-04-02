@@ -228,6 +228,16 @@ class _MePageState extends State<MePage> {
             child: Column(
               children: [
                 ListTile(
+                  leading: const Icon(Icons.record_voice_over_outlined),
+                  title: const Text('称谓'),
+                  subtitle: Text(
+                    _safeText(_currentUser.pronouns, fallback: '未设定'),
+                  ),
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap: _saving ? null : _editPronouns,
+                ),
+                const Divider(height: 1),
+                ListTile(
                   leading: const Icon(Icons.badge_outlined),
                   title: const Text('个人简介'),
                   subtitle: Text(
@@ -351,6 +361,37 @@ class _MePageState extends State<MePage> {
     );
     if (confirmed != true) return;
     await _updateUser(UpdateUserRequest(bio: controller.text.trim()));
+  }
+
+  Future<void> _editPronouns() async {
+    final controller = TextEditingController(text: _currentUser.pronouns);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('修改称谓'),
+        content: TextField(
+          controller: controller,
+          maxLength: 32,
+          decoration: const InputDecoration(
+            hintText: '例如 he/him、she/her、they/them',
+            helperText: '留空表示未设定',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _updateUser(UpdateUserRequest(pronouns: controller.text.trim()));
   }
 
   Future<void> _editStatus() async {
