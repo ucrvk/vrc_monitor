@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/network/vrc_network_image.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
@@ -50,7 +51,7 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
         _worldStore.getWorld(widget.worldId) ??
         await _worldStore.getOrFetch(widget.worldId, widget.api);
 
-    final imageUrl = world?.imageUrl.trim() ?? '';
+    final imageUrl = world?.thumbnailImageUrl.trim() ?? '';
     if (imageUrl.isNotEmpty) {
       unawaited(
         _cacheManager.imageCache.cacheWorldImage(
@@ -199,7 +200,7 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
                     flexibleSpace: FlexibleSpaceBar(
                       background: _WorldBanner(
                         dio: widget.api.dio,
-                        imageUrl: world?.imageUrl,
+                        imageUrl: world?.thumbnailImageUrl,
                       ),
                     ),
                   ),
@@ -382,10 +383,29 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
                               children: [
                                 Align(
                                   alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    description.isEmpty
-                                        ? 'No description'
-                                        : description,
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onLongPress: () async {
+                                      final text = description.isEmpty
+                                          ? 'No description'
+                                          : description;
+                                      await Clipboard.setData(
+                                        ClipboardData(text: text),
+                                      );
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('房间介绍已复制'),
+                                        ),
+                                      );
+                                    },
+                                    child: Text(
+                                      description.isEmpty
+                                          ? 'No description'
+                                          : description,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -445,24 +465,24 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
   }
 
   String _instanceRegionEmoji(Instance? instance) {
-  final regionCode =
-      (instance?.region.name ?? instance?.photonRegion.name ?? '')
-          .toLowerCase();
+    final regionCode =
+        (instance?.region.name ?? instance?.photonRegion.name ?? '')
+            .toLowerCase();
 
-  switch (regionCode) {
-    case 'jp':
-      return '🇯🇵';
-    case 'eu':
-      return '🇪🇺'; // 或者用 🇪🇺（欧盟）
-    case 'us':
-    case 'use': // US East
-    case 'usw': // US West
-    case 'usx': // 其他 US
-      return '🇺🇸';
-    default:
-      return '🌍';
+    switch (regionCode) {
+      case 'jp':
+        return '🇯🇵';
+      case 'eu':
+        return '🇪🇺'; // 或者用 🇪🇺（欧盟）
+      case 'us':
+      case 'use': // US East
+      case 'usw': // US West
+      case 'usx': // 其他 US
+        return '🇺🇸';
+      default:
+        return '🌍';
+    }
   }
-}
 
   String? _instanceOwnerUserId(Instance? instance) {
     final ownerId = instance?.ownerId?.trim() ?? '';

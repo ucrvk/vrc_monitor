@@ -189,7 +189,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
           }
 
           if (world != null) {
-            final imageUrl = world.imageUrl.trim();
+            final imageUrl = world.thumbnailImageUrl.trim();
             if (imageUrl.isNotEmpty) {
               await _cacheManager.imageCache.cacheWorldImage(
                 dio: widget.api.rawApi.dio,
@@ -249,7 +249,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
       tasks.add(() async {
         try {
           final world = _worldStore.getWorld(worldId);
-          final imageUrl = world?.imageUrl.trim() ?? '';
+          final imageUrl = world?.thumbnailImageUrl.trim() ?? '';
           if (imageUrl.isEmpty) return;
           await _cacheManager.imageCache.cacheWorldImage(
             dio: widget.api.rawApi.dio,
@@ -286,7 +286,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
     }
 
     final world = _worldStore.getWorld(roomRef.worldId);
-    final imageUrl = world?.imageUrl.trim() ?? '';
+    final imageUrl = world?.thumbnailImageUrl.trim() ?? '';
     if (imageUrl.isNotEmpty &&
         !_worldImageIdsInFlight.contains(roomRef.worldId)) {
       worldImagesToCache.add(roomRef.worldId);
@@ -539,7 +539,7 @@ class _FriendsMapPageState extends State<FriendsMapPage> {
         instanceId: builder.instanceId,
         displayInstanceId: _displayInstanceId(builder.instanceId),
         worldName: worldName,
-        worldImageUrl: world?.imageUrl,
+        worldImageUrl: world?.thumbnailImageUrl,
         roomTypeLabel: _instanceTypeByRoomKey[builder.roomKey],
         ownerUserId: builder.ownerUserId,
         ownerName: ownerName,
@@ -818,7 +818,7 @@ class _RoomCard extends StatelessWidget {
                   )
                 else ...[
                   Text(
-                    '${room.regionEmoji ?? '🌍'} ${room.worldName}#${room.displayInstanceId}'
+                    '${room.regionEmoji ?? '🌍'} ${room.worldName} #${room.displayInstanceId}'
                     '${roomType == null || roomType.isEmpty ? '' : ' $roomType'}',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
