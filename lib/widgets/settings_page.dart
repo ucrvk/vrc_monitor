@@ -7,6 +7,7 @@ import 'package:vrc_monitor/app_config.dart';
 import 'package:vrc_monitor/app_settings.dart';
 import 'package:vrc_monitor/services/auth_vault.dart';
 import 'package:vrc_monitor/services/cache_manager.dart';
+import 'package:vrc_monitor/services/update_installer.dart';
 import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/update_checker.dart';
 
@@ -19,6 +20,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final AppUpdateChecker _updateChecker = AppUpdateChecker();
+  final UpdateInstaller _updateInstaller = UpdateInstaller();
   String _branch = AppConfig.fallback.branch;
   String _appVersion = '读取中...';
   bool _checkingUpdate = false;
@@ -151,8 +153,8 @@ class _SettingsPageState extends State<SettingsPage> {
           title: const Text('发现新版本'),
           content: Text(
             info.force
-                ? '发现新版本 ${info.latestVersion}，请立即更新。'
-                : '发现新版本 ${info.latestVersion}，是否前往更新？',
+                ? _updateMessage(info, force: true)
+                : _updateMessage(info, force: false),
           ),
           actions: [
             if (!info.force)
@@ -163,15 +165,12 @@ class _SettingsPageState extends State<SettingsPage> {
             FilledButton(
               onPressed: () async {
                 final navigator = Navigator.of(dialogContext);
-                await launchUrl(
-                  await _updateChecker.releaseUrlForVersion(info.latestVersion),
-                  mode: LaunchMode.externalApplication,
-                );
+                await _handleUpdateAction(info);
                 if (mounted) {
                   navigator.pop();
                 }
               },
-              child: const Text('前往更新'),
+              child: Text(info.downloadLink.trim().isEmpty ? '前往更新' : '下载并安装'),
             ),
           ],
         ),
@@ -274,6 +273,46 @@ class _SettingsPageState extends State<SettingsPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('无法打开链接，请稍后重试。')));
+  }
+
+  String _updateMessage(AppUpdateInfo info, {required bool force}) {
+    final message = info.message.trim();
+    final tail = force ? '请立即更新。' : '是否前往更新？';
+    if (message.isEmpty) {
+      return '发现新版本 ${info.latestVersion}，$tail';
+    }
+    return '发现新版本 ${info.latestVersion}\n\n更新简介：$message\n\n$tail';
+  }
+
+  Future<void> _handleUpdateAction(AppUpdateInfo info) async {
+    final downloadLink = info.downloadLink.trim();
+    if (downloadLink.isNotEmpty) {
+      final downloadUri = Uri.tryParse(downloadLink);
+      if (downloadUri == null) {
+        _showLaunchFailedMessage();
+        return;
+      }
+      try {
+        final installed = await _updateInstaller.downloadAndInstallApk(
+          downloadLink,
+        );
+        if (installed) return;
+      } catch (_) {
+        // fallback to opening URL
+      }
+      final launched = await launchUrl(
+        downloadUri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched) _showLaunchFailedMessage();
+      return;
+    }
+
+    final launched = await launchUrl(
+      await _updateChecker.releaseUrlForVersion(info.latestVersion),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched) _showLaunchFailedMessage();
   }
 
   @override
