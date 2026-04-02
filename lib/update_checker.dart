@@ -81,7 +81,9 @@ class AppUpdateChecker {
       final force = _toBool(payload['force']);
       final message = payload['msg']?.toString().trim() ?? '';
       final downloadLink = payload['downloadLink']?.toString().trim() ?? '';
-      final sizeOriginal = _toPositiveInt(payload['sizeOriginal']);
+      final sizeOriginal =
+          _toPositiveInt(payload['sizeOriginal']) ??
+          _toPositiveInt(payload['apkSize']);
       if (!_isRemoteVersionNewer(remote: latestVersion, local: localVersion)) {
         return null;
       }
