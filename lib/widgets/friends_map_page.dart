@@ -808,28 +808,51 @@ class _RoomCard extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (room.isSelfTraveling)
-                  Text(
-                    room.selfTravelingText ?? '正在前往...',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  )
-                else ...[
-                  Text(
-                    '${room.regionEmoji ?? '🌍'} ${room.worldName} #${room.displayInstanceId}'
-                    '${roomType == null || roomType.isEmpty ? '' : ' $roomType'}',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  if (!isPublicRoom) ...[
-                    const SizedBox(height: 6),
-                    if (ownerClickable)
-                      InkWell(
-                        onTap: () => unawaited(onTapFriend(ownerUserId)),
-                        borderRadius: BorderRadius.circular(6),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 2),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onTapRoom,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (room.isSelfTraveling)
+                    Text(
+                      room.selfTravelingText ?? '正在前往...',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    )
+                  else ...[
+                    Text(
+                      '${room.regionEmoji ?? '🌍'} ${room.worldName} #${room.displayInstanceId}'
+                      '${roomType == null || roomType.isEmpty ? '' : ' $roomType'}',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    if (!isPublicRoom) ...[
+                      const SizedBox(height: 6),
+                      if (ownerClickable)
+                        InkWell(
+                          onTap: () => unawaited(onTapFriend(ownerUserId)),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text.rich(
+                              TextSpan(
+                                text: '房主: ',
+                                children: [
+                                  TextSpan(
+                                    text: ownerLabel,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ),
+                        )
+                      else
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {},
                           child: Text.rich(
                             TextSpan(
                               text: '房主: ',
@@ -845,62 +868,56 @@ class _RoomCard extends StatelessWidget {
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                         ),
-                      )
-                    else
-                      Text.rich(
-                        TextSpan(
-                          text: '房主: ',
-                          children: [
-                            TextSpan(
-                              text: ownerLabel,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        ),
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
+                    ],
                   ],
-                ],
-                const SizedBox(height: 10),
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    mainAxisSpacing: 8,
-                    crossAxisSpacing: 8,
-                    childAspectRatio: 0.78,
-                  ),
-                  itemCount: room.members.length + (showSelfTile ? 1 : 0),
-                  itemBuilder: (context, index) {
-                    if (showSelfTile && index == 0) {
-                      return _SelfMemberTile(
-                        dio: dio,
-                        imageUrl: selfAvatarUrl,
-                        fileId: selfAvatarFileId,
-                        onTap: onTapSelf,
-                      );
-                    }
-                    final member =
-                        room.members[showSelfTile ? index - 1 : index];
-                    return _MemberTile(
-                      user: member,
-                      dio: dio,
-                      onTap: () => onTapFriend(member.id),
-                    );
-                  },
-                ),
-                if (room.members.isEmpty && showSelfTile)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      '当前没有好友在此房间',
-                      style: Theme.of(context).textTheme.bodyMedium,
+                  const SizedBox(height: 10),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {},
+                    child: GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 4,
+                            mainAxisSpacing: 8,
+                            crossAxisSpacing: 8,
+                            childAspectRatio: 0.78,
+                          ),
+                      itemCount: room.members.length + (showSelfTile ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (showSelfTile && index == 0) {
+                          return _SelfMemberTile(
+                            dio: dio,
+                            imageUrl: selfAvatarUrl,
+                            fileId: selfAvatarFileId,
+                            onTap: onTapSelf,
+                          );
+                        }
+                        final member =
+                            room.members[showSelfTile ? index - 1 : index];
+                        return _MemberTile(
+                          user: member,
+                          dio: dio,
+                          onTap: () => onTapFriend(member.id),
+                        );
+                      },
                     ),
                   ),
-              ],
+                  if (room.members.isEmpty && showSelfTile)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {},
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          '当前没有好友在此房间',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ],

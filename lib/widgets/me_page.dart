@@ -319,22 +319,22 @@ class _MePageState extends State<MePage> {
           maxLines: _bioExpanded ? null : 4,
           overflow: _bioExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
         ),
-        Align(
-          alignment: Alignment.center,
-          child: IconButton(
-            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-            padding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-            tooltip: _bioExpanded ? '收起简介' : '展开简介',
-            onPressed: () {
-              setState(() {
-                _bioExpanded = !_bioExpanded;
-              });
-            },
-            icon: Icon(
-              _bioExpanded
-                  ? Icons.keyboard_arrow_up
-                  : Icons.keyboard_arrow_down,
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            setState(() {
+              _bioExpanded = !_bioExpanded;
+            });
+          },
+          child: SizedBox(
+            width: double.infinity,
+            height: 28,
+            child: Center(
+              child: Icon(
+                _bioExpanded
+                    ? Icons.keyboard_arrow_up
+                    : Icons.keyboard_arrow_down,
+              ),
             ),
           ),
         ),
