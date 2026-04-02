@@ -118,6 +118,7 @@ class _MePageState extends State<MePage> {
   bool _loadingUser = false;
   bool _saving = false;
   bool _lookupLoading = false;
+  bool _bioExpanded = false;
 
   @override
   void initState() {
@@ -240,9 +241,8 @@ class _MePageState extends State<MePage> {
                 ListTile(
                   leading: const Icon(Icons.badge_outlined),
                   title: const Text('个人简介'),
-                  subtitle: Text(
-                    _safeText(_currentUser.bio, fallback: '暂无个人简介'),
-                  ),
+                  subtitle: _buildBioSubtitle(),
+                  isThreeLine: _bioExpanded,
                   trailing: const Icon(Icons.edit_outlined),
                   onTap: _saving ? null : _editBio,
                 ),
@@ -293,6 +293,37 @@ class _MePageState extends State<MePage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildBioSubtitle() {
+    final bio = _currentUser.bio.trim();
+    if (bio.isEmpty) {
+      return const Text('暂无个人简介');
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          bio,
+          maxLines: _bioExpanded ? null : 4,
+          overflow: _bioExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 4),
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _bioExpanded = !_bioExpanded;
+            });
+          },
+          behavior: HitTestBehavior.opaque,
+          child: Text(
+            _bioExpanded ? '收起' : '展开',
+            style: TextStyle(color: Theme.of(context).colorScheme.primary),
+          ),
+        ),
+      ],
     );
   }
 
