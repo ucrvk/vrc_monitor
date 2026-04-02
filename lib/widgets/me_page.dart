@@ -320,7 +320,7 @@ class _MePageState extends State<MePage> {
           overflow: _bioExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
         ),
         Align(
-          alignment: Alignment.centerLeft,
+          alignment: Alignment.center,
           child: IconButton(
             constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
             padding: EdgeInsets.zero,
