@@ -7,6 +7,7 @@ import 'package:vrc_monitor/app_config.dart';
 import 'package:vrc_monitor/app_settings.dart';
 import 'package:vrc_monitor/services/auth_vault.dart';
 import 'package:vrc_monitor/services/cache_manager.dart';
+import 'package:vrc_monitor/services/update_installer.dart';
 import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/update_checker.dart';
 
@@ -19,6 +20,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final AppUpdateChecker _updateChecker = AppUpdateChecker();
+  final UpdateInstaller _updateInstaller = UpdateInstaller();
   String _branch = AppConfig.fallback.branch;
   String _appVersion = '读取中...';
   bool _checkingUpdate = false;
@@ -136,7 +138,9 @@ class _SettingsPageState extends State<SettingsPage> {
       _checkingUpdate = true;
     });
     try {
-      final info = await _updateChecker.checkForUpdate();
+      final info = await _updateChecker.checkForUpdate(
+        respectIgnoredVersion: false,
+      );
       if (!mounted) return;
       if (info == null) {
         ScaffoldMessenger.of(
@@ -151,28 +155,35 @@ class _SettingsPageState extends State<SettingsPage> {
           title: const Text('发现新版本'),
           content: Text(
             info.force
-                ? '发现新版本 ${info.latestVersion}，请立即更新。'
-                : '发现新版本 ${info.latestVersion}，是否前往更新？',
+                ? _updateMessage(info, force: true)
+                : _updateMessage(info, force: false),
           ),
           actions: [
-            if (!info.force)
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('稍后'),
-              ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
             FilledButton(
               onPressed: () async {
                 final navigator = Navigator.of(dialogContext);
-                await launchUrl(
-                  await _updateChecker.releaseUrlForVersion(info.latestVersion),
-                  mode: LaunchMode.externalApplication,
-                );
+                await _openGithubDownload(info);
                 if (mounted) {
                   navigator.pop();
                 }
               },
-              child: const Text('前往更新'),
+              child: const Text('访问 GitHub 下载'),
             ),
+            if (info.sourceType == UpdateSourceType.updateManager)
+              FilledButton(
+                onPressed: () async {
+                  final navigator = Navigator.of(dialogContext);
+                  await _handleAutoDownloadAction(info);
+                  if (mounted) {
+                    navigator.pop();
+                  }
+                },
+                child: const Text('自动下载'),
+              ),
           ],
         ),
       );
@@ -269,11 +280,124 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  void _showLaunchFailedMessage() {
+  void _showLaunchFailedMessage([String message = '无法打开链接，请稍后重试。']) {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('无法打开链接，请稍后重试。')));
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  String _updateMessage(AppUpdateInfo info, {required bool force}) {
+    final message = info.message.trim();
+    final tail = force ? '请立即更新。' : '是否前往更新？';
+    if (message.isEmpty) {
+      return '发现新版本 ${info.latestVersion}，$tail';
+    }
+    return '发现新版本 ${info.latestVersion}\n\n更新简介：$message\n\n$tail';
+  }
+
+  Future<void> _openGithubDownload(AppUpdateInfo info) async {
+    final launched = await launchUrl(
+      await _updateChecker.releaseUrlForVersion(info.latestVersion),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched) _showLaunchFailedMessage();
+  }
+
+  Future<void> _handleAutoDownloadAction(AppUpdateInfo info) async {
+    final downloadLink = info.downloadLink.trim();
+    if (downloadLink.isEmpty) {
+      _showLaunchFailedMessage('更新源未提供下载地址，请稍后重试。');
+      return;
+    }
+
+    final downloadUri = Uri.tryParse(downloadLink);
+    if (downloadUri == null) {
+      _showLaunchFailedMessage();
+      return;
+    }
+    try {
+      final installed = await _downloadAndInstallWithProgress(
+        info,
+        downloadLink,
+      );
+      if (installed) return;
+    } catch (_) {
+      // fallback to opening URL
+    }
+    final launched = await launchUrl(
+      downloadUri,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched) _showLaunchFailedMessage();
+  }
+
+  Future<bool> _downloadAndInstallWithProgress(
+    AppUpdateInfo info,
+    String downloadLink,
+  ) async {
+    final progress = ValueNotifier<_DownloadProgress>(
+      const _DownloadProgress(receivedBytes: 0, totalBytes: null),
+    );
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => ValueListenableBuilder<_DownloadProgress>(
+        valueListenable: progress,
+        builder: (buildContext, value, child) {
+          final total = value.totalBytes;
+          final fraction = total == null || total <= 0
+              ? null
+              : value.receivedBytes / total;
+          final percentText = fraction == null
+              ? '下载中...'
+              : '下载中 ${(fraction * 100).clamp(0, 100).toStringAsFixed(1)}%';
+          return AlertDialog(
+            title: const Text('正在下载更新'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(value: fraction),
+                const SizedBox(height: 12),
+                Text(
+                  '$percentText\n${_formatBytes(value.receivedBytes)}'
+                  '${total == null ? '' : ' / ${_formatBytes(total)}'}',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    try {
+      return await _updateInstaller.downloadAndInstallApk(
+        downloadLink,
+        expectedTotalBytes: info.sizeOriginal,
+        onProgress: (receivedBytes, totalBytes) {
+          progress.value = _DownloadProgress(
+            receivedBytes: receivedBytes,
+            totalBytes: totalBytes > 0 ? totalBytes : null,
+          );
+        },
+      );
+    } finally {
+      progress.dispose();
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).maybePop();
+      }
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    final kb = bytes / 1024;
+    if (kb < 1024) return '${kb.toStringAsFixed(1)} KB';
+    final mb = kb / 1024;
+    if (mb < 1024) return '${mb.toStringAsFixed(1)} MB';
+    final gb = mb / 1024;
+    return '${gb.toStringAsFixed(1)} GB';
   }
 
   @override
@@ -448,4 +572,14 @@ class _SettingsPageState extends State<SettingsPage> {
       ThemeMode.dark => '深色',
     };
   }
+}
+
+class _DownloadProgress {
+  const _DownloadProgress({
+    required this.receivedBytes,
+    required this.totalBytes,
+  });
+
+  final int receivedBytes;
+  final int? totalBytes;
 }

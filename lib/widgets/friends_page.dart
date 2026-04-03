@@ -159,6 +159,7 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   void _handleUserStoreChanged() {
+    _buildFavoriteGroupsFromStore();
     unawaited(_resolveLocationsForOnlineFriends());
   }
 
@@ -440,11 +441,16 @@ class _FriendsPageState extends State<FriendsPage> {
   Widget _buildOnlineGroupSection(List<User> onlineFriends) {
     final favoriteSections = <Widget>[];
     final assignedFriendIds = <String>{};
+    var hasFavoriteMembers = false;
 
     for (final favoriteGroup in _favoriteFriendGroups) {
       final members = onlineFriends
           .where((u) => favoriteGroup.friendIds.contains(u.id))
           .toList();
+      if (members.isEmpty) {
+        continue;
+      }
+      hasFavoriteMembers = true;
       assignedFriendIds.addAll(members.map((m) => m.id));
 
       favoriteSections.add(
@@ -466,7 +472,7 @@ class _FriendsPageState extends State<FriendsPage> {
         .where((u) => !assignedFriendIds.contains(u.id))
         .toList();
 
-    if (favoriteSections.isNotEmpty) {
+    if (hasFavoriteMembers) {
       favoriteSections.add(
         ExpansionTile(
           initiallyExpanded: true,
