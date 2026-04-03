@@ -76,25 +76,30 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
           ),
           actions: [
             TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('取消'),
+            ),
+            FilledButton(
               onPressed: () async {
-                await _updateChecker.ignoreVersion(info.latestVersion);
-                if (context.mounted) {
+                final launched = await _openGithubDownload(info);
+                if (context.mounted && launched) {
                   Navigator.of(context).pop();
                 }
               },
-              child: const Text('取消（不再提示）'),
+              child: const Text('访问 GitHub 下载'),
             ),
-            FilledButton(
-              onPressed: _canHandleUpdateAction(info)
-                  ? () async {
-                      final launched = await _handleUpdateAction(info);
-                      if (context.mounted && launched) {
-                        Navigator.of(context).pop();
-                      }
-                    }
-                  : null,
-              child: Text(_updateActionLabel(info)),
-            ),
+            if (info.sourceType == UpdateSourceType.updateManager)
+              FilledButton(
+                onPressed: () async {
+                  final launched = await _handleAutoDownloadAction(info);
+                  if (context.mounted && launched) {
+                    Navigator.of(context).pop();
+                  }
+                },
+                child: const Text('自动下载'),
+              ),
           ],
         );
       },
@@ -126,56 +131,50 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
               child: const Text('退出'),
             ),
             FilledButton(
-              onPressed: _canHandleUpdateAction(info)
-                  ? () async {
-                      await _handleUpdateAction(info);
-                    }
-                  : null,
-              child: Text(_updateActionLabel(info)),
+              onPressed: () async {
+                await _openGithubDownload(info);
+              },
+              child: const Text('访问 GitHub 下载'),
             ),
+            if (info.sourceType == UpdateSourceType.updateManager)
+              FilledButton(
+                onPressed: () async {
+                  await _handleAutoDownloadAction(info);
+                },
+                child: const Text('自动下载'),
+              ),
           ],
         );
       },
     );
   }
 
-  bool _canHandleUpdateAction(AppUpdateInfo info) {
-    if (info.downloadLink.trim().isNotEmpty) return true;
-    return info.sourceType == UpdateSourceType.github;
-  }
-
-  String _updateActionLabel(AppUpdateInfo info) {
-    if (info.downloadLink.trim().isNotEmpty) return '下载并安装';
-    if (info.sourceType == UpdateSourceType.github) return '前往 GitHub 更新';
-    return '暂无下载地址';
-  }
-
-  Future<bool> _handleUpdateAction(AppUpdateInfo info) async {
-    final downloadLink = info.downloadLink.trim();
-    if (downloadLink.isNotEmpty) {
-      final downloadUri = Uri.tryParse(downloadLink);
-      if (downloadUri == null) return false;
-      try {
-        final installed = await _downloadAndInstallWithProgress(
-          info,
-          downloadLink,
-        );
-        if (installed) return true;
-      } catch (_) {
-        // fallback to opening URL
-      }
-      return launchUrl(downloadUri, mode: LaunchMode.externalApplication);
-    }
-
-    if (info.sourceType == UpdateSourceType.updateManager) {
-      _showLaunchFailedMessage('更新源未提供下载地址，请稍后重试。');
-      return false;
-    }
-
+  Future<bool> _openGithubDownload(AppUpdateInfo info) async {
     return launchUrl(
       await _updateChecker.releaseUrlForVersion(info.latestVersion),
       mode: LaunchMode.externalApplication,
     );
+  }
+
+  Future<bool> _handleAutoDownloadAction(AppUpdateInfo info) async {
+    final downloadLink = info.downloadLink.trim();
+    if (downloadLink.isEmpty) {
+      _showLaunchFailedMessage('更新源未提供下载地址，请稍后重试。');
+      return false;
+    }
+
+    final downloadUri = Uri.tryParse(downloadLink);
+    if (downloadUri == null) return false;
+    try {
+      final installed = await _downloadAndInstallWithProgress(
+        info,
+        downloadLink,
+      );
+      if (installed) return true;
+    } catch (_) {
+      // fallback to opening URL
+    }
+    return launchUrl(downloadUri, mode: LaunchMode.externalApplication);
   }
 
   Future<bool> _downloadAndInstallWithProgress(

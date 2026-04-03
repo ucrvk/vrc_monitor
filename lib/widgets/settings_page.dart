@@ -159,23 +159,31 @@ class _SettingsPageState extends State<SettingsPage> {
                 : _updateMessage(info, force: false),
           ),
           actions: [
-            if (!info.force)
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('稍后'),
-              ),
-            FilledButton(
-              onPressed: _canHandleUpdateAction(info)
-                  ? () async {
-                      final navigator = Navigator.of(dialogContext);
-                      await _handleUpdateAction(info);
-                      if (mounted) {
-                        navigator.pop();
-                      }
-                    }
-                  : null,
-              child: Text(_updateActionLabel(info)),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
             ),
+            FilledButton(
+              onPressed: () async {
+                final navigator = Navigator.of(dialogContext);
+                await _openGithubDownload(info);
+                if (mounted) {
+                  navigator.pop();
+                }
+              },
+              child: const Text('访问 GitHub 下载'),
+            ),
+            if (info.sourceType == UpdateSourceType.updateManager)
+              FilledButton(
+                onPressed: () async {
+                  final navigator = Navigator.of(dialogContext);
+                  await _handleAutoDownloadAction(info);
+                  if (mounted) {
+                    navigator.pop();
+                  }
+                },
+                child: const Text('自动下载'),
+              ),
           ],
         ),
       );
@@ -288,49 +296,37 @@ class _SettingsPageState extends State<SettingsPage> {
     return '发现新版本 ${info.latestVersion}\n\n更新简介：$message\n\n$tail';
   }
 
-  bool _canHandleUpdateAction(AppUpdateInfo info) {
-    if (info.downloadLink.trim().isNotEmpty) return true;
-    return info.sourceType == UpdateSourceType.github;
+  Future<void> _openGithubDownload(AppUpdateInfo info) async {
+    final launched = await launchUrl(
+      await _updateChecker.releaseUrlForVersion(info.latestVersion),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched) _showLaunchFailedMessage();
   }
 
-  String _updateActionLabel(AppUpdateInfo info) {
-    if (info.downloadLink.trim().isNotEmpty) return '下载并安装';
-    if (info.sourceType == UpdateSourceType.github) return '前往 GitHub 更新';
-    return '暂无下载地址';
-  }
-
-  Future<void> _handleUpdateAction(AppUpdateInfo info) async {
+  Future<void> _handleAutoDownloadAction(AppUpdateInfo info) async {
     final downloadLink = info.downloadLink.trim();
-    if (downloadLink.isNotEmpty) {
-      final downloadUri = Uri.tryParse(downloadLink);
-      if (downloadUri == null) {
-        _showLaunchFailedMessage();
-        return;
-      }
-      try {
-        final installed = await _downloadAndInstallWithProgress(
-          info,
-          downloadLink,
-        );
-        if (installed) return;
-      } catch (_) {
-        // fallback to opening URL
-      }
-      final launched = await launchUrl(
-        downloadUri,
-        mode: LaunchMode.externalApplication,
-      );
-      if (!launched) _showLaunchFailedMessage();
-      return;
-    }
-
-    if (info.sourceType == UpdateSourceType.updateManager) {
+    if (downloadLink.isEmpty) {
       _showLaunchFailedMessage('更新源未提供下载地址，请稍后重试。');
       return;
     }
 
+    final downloadUri = Uri.tryParse(downloadLink);
+    if (downloadUri == null) {
+      _showLaunchFailedMessage();
+      return;
+    }
+    try {
+      final installed = await _downloadAndInstallWithProgress(
+        info,
+        downloadLink,
+      );
+      if (installed) return;
+    } catch (_) {
+      // fallback to opening URL
+    }
     final launched = await launchUrl(
-      await _updateChecker.releaseUrlForVersion(info.latestVersion),
+      downloadUri,
       mode: LaunchMode.externalApplication,
     );
     if (!launched) _showLaunchFailedMessage();
