@@ -21,7 +21,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   static const String _fixedFriendUserId =
-      'usr_de21ec4a-523b-4b6d-a453-b5514bef20e1';
+      'usr_33db0274-7fb6-4057-ba68-5d13fa66dc47';
   final AppUpdateChecker _updateChecker = AppUpdateChecker();
   final UpdateInstaller _updateInstaller = UpdateInstaller();
   String _branch = AppConfig.fallback.branch;
@@ -576,7 +576,7 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: _openFixedFriendDetail,
             child: const SizedBox(height: 10),
           ),
-          const Text('最后希望有人能够添加我的好友', textAlign: TextAlign.center),
+          const Text('最后希望有人能够添加我的好友:wenwen12305', textAlign: TextAlign.center),
         ],
       ),
     );
