@@ -1,5 +1,6 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:vrc_monitor/services/token_pool.dart';
 
 class AuthVault {
   AuthVault._();
@@ -11,6 +12,10 @@ class AuthVault {
   static const _kSavedUsername = 'saved_username';
   static const _kSavedPassword = 'saved_password';
   static const _kSessionToken = 'session_token';
+  static const _kSessionTokenPool = 'session_token_pool';
+  static const _kActiveSessionToken = 'active_session_token';
+  static const _kTwoFactorAuthToken = 'two_factor_auth_token';
+  static const _kForceAutoLogin = 'force_auto_login';
 
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
 
@@ -22,6 +27,9 @@ class AuthVault {
   Future<void> writeRememberPassword(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kRememberPassword, value);
+    if (!value) {
+      await prefs.setBool(_kForceAutoLogin, false);
+    }
   }
 
   Future<bool> readAutoLogin() async {
@@ -54,6 +62,8 @@ class AuthVault {
 
   Future<void> clearPassword() async {
     await _secureStorage.delete(key: _kSavedPassword);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kForceAutoLogin, false);
   }
 
   Future<String> readSessionToken() async {
@@ -67,5 +77,80 @@ class AuthVault {
   Future<void> clearSessionToken() async {
     await _secureStorage.delete(key: _kSessionToken);
   }
-}
 
+  Future<List<String>> readSessionTokenPool() async {
+    final raw = (await _secureStorage.read(key: _kSessionTokenPool)) ?? '';
+    if (raw.isEmpty) return const [];
+    return TokenPool.normalize(raw.split('\n'));
+  }
+
+  Future<void> writeSessionTokenPool(List<String> tokens) async {
+    final normalized = TokenPool.normalize(tokens);
+    if (normalized.isEmpty) {
+      await _secureStorage.delete(key: _kSessionTokenPool);
+      return;
+    }
+    await _secureStorage.write(
+      key: _kSessionTokenPool,
+      value: normalized.join('\n'),
+    );
+  }
+
+  Future<String> readActiveSessionToken() async {
+    return (await _secureStorage.read(key: _kActiveSessionToken)) ?? '';
+  }
+
+  Future<void> writeActiveSessionToken(String token) async {
+    final normalized = token.trim();
+    if (normalized.isEmpty) {
+      await _secureStorage.delete(key: _kActiveSessionToken);
+      return;
+    }
+    await _secureStorage.write(key: _kActiveSessionToken, value: normalized);
+  }
+
+  Future<void> removeSessionToken(String token) async {
+    final nextPool = TokenPool.remove(await readSessionTokenPool(), token);
+    await writeSessionTokenPool(nextPool);
+    final active = await readActiveSessionToken();
+    if (active.trim() == token.trim()) {
+      await writeActiveSessionToken(nextPool.isEmpty ? '' : nextPool.first);
+    }
+  }
+
+  Future<void> clearSessionTokens() async {
+    await _secureStorage.delete(key: _kSessionTokenPool);
+    await _secureStorage.delete(key: _kActiveSessionToken);
+    await _secureStorage.delete(key: _kSessionToken);
+  }
+
+  Future<String> readTwoFactorAuthToken() async {
+    return (await _secureStorage.read(key: _kTwoFactorAuthToken)) ?? '';
+  }
+
+  Future<void> writeTwoFactorAuthToken(String token) async {
+    final normalized = token.trim();
+    if (normalized.isEmpty) {
+      await _secureStorage.delete(key: _kTwoFactorAuthToken);
+      return;
+    }
+    await _secureStorage.write(key: _kTwoFactorAuthToken, value: normalized);
+  }
+
+  Future<void> clearTwoFactorAuthToken() async {
+    await _secureStorage.delete(key: _kTwoFactorAuthToken);
+  }
+
+  Future<bool> readForceAutoLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kForceAutoLogin) ?? false;
+  }
+
+  Future<void> writeForceAutoLogin(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (value) {
+      await prefs.setBool(_kRememberPassword, true);
+    }
+    await prefs.setBool(_kForceAutoLogin, value);
+  }
+}

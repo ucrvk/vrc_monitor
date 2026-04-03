@@ -5,17 +5,30 @@ class AppConfig {
   const AppConfig({
     required this.githubPage,
     required this.branch,
+    this.updateManagerBaseUrl,
   });
 
   static const AppConfig fallback = AppConfig(
     githubPage: 'https://github.com/ucrvk/vrc_monitor',
     branch: 'beta',
+    updateManagerBaseUrl: "https://69ce488b001f9010ee69.fra.appwrite.run/",
   );
 
   final String githubPage;
   final String branch;
+  final String? updateManagerBaseUrl;
 
   Uri get githubPageUri => Uri.parse(githubPage);
+
+  bool get hasUpdateManager =>
+      (updateManagerBaseUrl?.trim().isNotEmpty ?? false);
+
+  Uri? get updateManagerConfigUri {
+    final base = updateManagerBaseUrl?.trim() ?? '';
+    if (base.isEmpty) return null;
+    final normalized = base.replaceFirst(RegExp(r'/+$'), '');
+    return Uri.tryParse(normalized);
+  }
 
   Uri releaseUrlForVersion(String version) {
     final base = githubPage.replaceFirst(RegExp(r'/+$'), '');
@@ -61,6 +74,7 @@ class AppConfigLoader {
     return AppConfig(
       githubPage: AppConfig.fallback.githubPage,
       branch: branch,
+      updateManagerBaseUrl: AppConfig.fallback.updateManagerBaseUrl,
     );
   }
 

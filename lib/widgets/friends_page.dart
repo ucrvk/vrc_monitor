@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/utils/location_utils.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/friend_search_page.dart';
@@ -24,6 +25,7 @@ class FriendsPage extends StatefulWidget {
 class _FriendsPageState extends State<FriendsPage> {
   final cache.CacheManager _cacheManager = cache.CacheManager.instance;
   final UserStore _userStore = UserStore.instance;
+  final WorldStore _worldStore = WorldStore.instance;
 
   final Map<String, String> _worldNameById = {};
   final Map<String, String> _instanceTypeByLocation = {};
@@ -88,13 +90,13 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   Future<void> _hydrateFromCache() async {
-    await _cacheManager.worldNameCache.load();
+    await _worldStore.initialize();
     if (!mounted) return;
 
     setState(() {
       _worldNameById
         ..clear()
-        ..addAll(_cacheManager.worldNameCache.worldNameById);
+        ..addAll(_worldStore.worldNameById);
       _instanceTypeByLocation
         ..clear()
         ..addAll(_cacheManager.memoryCache.instanceTypeByLocation);
@@ -157,6 +159,7 @@ class _FriendsPageState extends State<FriendsPage> {
   }
 
   void _handleUserStoreChanged() {
+    _buildFavoriteGroupsFromStore();
     unawaited(_resolveLocationsForOnlineFriends());
   }
 
@@ -174,7 +177,7 @@ class _FriendsPageState extends State<FriendsPage> {
         final parsed = cache.CacheManager.parseLocation(travelingTo);
         final worldId = parsed?.worldId;
         if (worldId != null) {
-          final cached = _cacheManager.worldNameCache.worldName(worldId);
+          final cached = _worldStore.getWorldName(worldId);
           if (cached != null && cached.isNotEmpty) {
             if (_worldNameById[worldId] != cached) {
               _worldNameById[worldId] = cached;
@@ -192,7 +195,7 @@ class _FriendsPageState extends State<FriendsPage> {
       final parsed = cache.CacheManager.parseLocation(location);
       final worldId = parsed?.worldId;
       if (worldId != null) {
-        final cached = _cacheManager.worldNameCache.worldName(worldId);
+        final cached = _worldStore.getWorldName(worldId);
         if (cached != null && cached.isNotEmpty) {
           if (_worldNameById[worldId] != cached) {
             _worldNameById[worldId] = cached;
@@ -229,27 +232,18 @@ class _FriendsPageState extends State<FriendsPage> {
     for (final worldId in worldIdsToFetch) {
       tasks.add(() async {
         try {
-          final (success, _) = await _runVrcRequest(
-            () => widget.api.rawApi
-                .getWorldsApi()
-                .getWorld(worldId: worldId)
-                .validateVrc(),
+          final world = await _worldStore.getOrFetch(
+            worldId,
+            widget.api.rawApi,
           );
-
-          final next = success?.data.name ?? worldId;
+          final next = world?.name.trim().isNotEmpty == true
+              ? world!.name
+              : worldId;
           if (_worldNameById[worldId] != next) {
             _worldNameById[worldId] = next;
             if (mounted) {
               setState(() {});
             }
-          }
-          if (success != null && success.data.name.isNotEmpty) {
-            unawaited(
-              _cacheManager.worldNameCache.putWorldName(
-                worldId,
-                success.data.name,
-              ),
-            );
           }
         } finally {
           _worldIdsInFlight.remove(worldId);
@@ -293,30 +287,6 @@ class _FriendsPageState extends State<FriendsPage> {
     }
   }
 
-  int _statusPriority(UserStatus status) {
-    switch (status) {
-      case UserStatus.joinMe:
-        return 0;
-      case UserStatus.active:
-        return 1;
-      case UserStatus.askMe:
-        return 2;
-      case UserStatus.busy:
-        return 3;
-      case UserStatus.offline:
-        return 4;
-    }
-  }
-
-  int _onlineFavoritePriority(String friendId) {
-    for (var i = 0; i < _favoriteFriendGroups.length; i++) {
-      if (_favoriteFriendGroups[i].friendIds.contains(friendId)) {
-        return i;
-      }
-    }
-    return _favoriteFriendGroups.length + 1;
-  }
-
   String _locationTextFor(User friend) {
     final eventLocation = _userStore.getEventLocation(friend.id);
     final eventWorldName = (() {
@@ -330,8 +300,7 @@ class _FriendsPageState extends State<FriendsPage> {
       if (worldId == null) return null;
 
       final worldName =
-          _worldNameById[worldId] ??
-          _cacheManager.worldNameCache.worldName(worldId);
+          _worldStore.getWorldName(worldId) ?? _worldNameById[worldId];
       if (worldName != null && worldName.isNotEmpty) {
         _worldNameById[worldId] = worldName;
       }
@@ -355,7 +324,9 @@ class _FriendsPageState extends State<FriendsPage> {
     final parsed = cache.CacheManager.parseLocation(location);
     if (parsed == null) return location;
 
-    final worldName = _worldNameById[parsed.worldId];
+    final worldName =
+        _worldStore.getWorldName(parsed.worldId) ??
+        _worldNameById[parsed.worldId];
     final base = (worldName == null || worldName == parsed.worldId)
         ? location
         : worldName;
@@ -470,11 +441,16 @@ class _FriendsPageState extends State<FriendsPage> {
   Widget _buildOnlineGroupSection(List<User> onlineFriends) {
     final favoriteSections = <Widget>[];
     final assignedFriendIds = <String>{};
+    var hasFavoriteMembers = false;
 
     for (final favoriteGroup in _favoriteFriendGroups) {
       final members = onlineFriends
           .where((u) => favoriteGroup.friendIds.contains(u.id))
           .toList();
+      if (members.isEmpty) {
+        continue;
+      }
+      hasFavoriteMembers = true;
       assignedFriendIds.addAll(members.map((m) => m.id));
 
       favoriteSections.add(
@@ -496,7 +472,7 @@ class _FriendsPageState extends State<FriendsPage> {
         .where((u) => !assignedFriendIds.contains(u.id))
         .toList();
 
-    if (favoriteSections.isNotEmpty) {
+    if (hasFavoriteMembers) {
       favoriteSections.add(
         ExpansionTile(
           initiallyExpanded: true,
@@ -618,7 +594,7 @@ class _FriendsPageState extends State<FriendsPage> {
 
   Future<void> _onRefreshPressed() async {
     _startRefreshCooldown();
-    await _userStore.initialize(widget.api);
+    await _userStore.refreshForForeground(widget.api);
     _buildFavoriteGroupsFromStore();
     await _resolveLocationsForOnlineFriends();
   }
@@ -644,7 +620,7 @@ class _FriendsPageState extends State<FriendsPage> {
           bio: user.bio,
           statusDescription: user.statusDescription,
           pronouns: user.pronouns,
-          bioLinks: user.bioLinks ?? const [],
+          bioLinks: user.bioLinks,
           dateJoined: user.dateJoined,
           lastActivity: DateTime.tryParse(user.lastActivity),
           profilePicOverrideThumbnail: user.profilePicOverrideThumbnail,
@@ -665,7 +641,7 @@ class _FriendsPageState extends State<FriendsPage> {
           id: limited.id,
           displayName: limited.displayName,
           status: UserStatus.offline,
-          location: limited.location ?? 'offline',
+          location: limited.location,
           locationText: '离线',
           lastPlatform: limited.lastPlatform,
           tags: limited.tags,

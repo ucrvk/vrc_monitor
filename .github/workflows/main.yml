@@ -94,7 +94,7 @@ jobs:
             cat > release_notes.md <<EOF
           Auto build from beta branch because version.json changed.
 
-          Full Changelog: ${{ steps.prev_tag.outputs.prev_tag }}...${{ steps.version.outputs.tag }}
+          [Full Changelog](https://github.com/${{ github.repository }}/compare/${{ steps.prev_tag.outputs.prev_tag }}...${{ steps.version.outputs.tag }})
           EOF
           else
             cat > release_notes.md <<EOF

@@ -3,7 +3,10 @@ import 'dart:ui' show Color;
 
 import 'package:flutter/foundation.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/auth_manager.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
+import 'package:vrc_monitor/services/world_store.dart';
+import 'package:vrc_monitor/utils/location_utils.dart';
 
 class FavoriteGroupData {
   const FavoriteGroupData({required this.name, required this.displayName});
@@ -153,6 +156,10 @@ class UserStore extends ChangeNotifier {
   final Map<String, String> _headerFileIdByUserId = <String, String>{};
   final Map<String, String> _locationByUserId = <String, String>{};
   final Map<String, String> _eventWorldNameByUserId = <String, String>{};
+  String? _selfLocation;
+  String? _selfInstance;
+  String? _selfEventWorldName;
+  String? _selfWorldId;
   final Map<String, LimitedUserFriend> _limitedUsers =
       <String, LimitedUserFriend>{};
   final Map<String, List<MutualFriend>> _mutualFriends =
@@ -171,6 +178,7 @@ class UserStore extends ChangeNotifier {
   bool _stopRequested = false;
   int _reconnectAttempt = 0;
   WsConnectionStatus _wsStatus = WsConnectionStatus.disconnected;
+  String? _wsFailureMessage;
 
   List<FavoriteGroupData> _favoriteGroups = const [];
   Map<String, String> _userFavoriteGroup = {}; // userId -> groupName
@@ -196,18 +204,81 @@ class UserStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshForForeground(VrchatDart api) async {
+    await initialize(api);
+    await _refreshSelfLocationFromCurrentUser(api.rawApi);
+    await ensureRealtimeSync(api);
+  }
+
+  Future<void> _refreshSelfLocationFromCurrentUser(
+    VrchatDartGenerated api,
+  ) async {
+    try {
+      final (success, _) = await api
+          .getAuthenticationApi()
+          .getCurrentUser()
+          .validateVrc();
+      final currentUser = success?.data;
+      if (currentUser == null) return;
+
+      final presence = currentUser.presence;
+      final world = presence?.world?.trim() ?? '';
+      final instance = presence?.instance?.trim() ?? '';
+      var location = '';
+
+      if (world.isEmpty) {
+        location = '';
+      } else if (world.toLowerCase() == 'offline') {
+        location = 'offline';
+      } else if (LocationUtils.isTraveling(world)) {
+        location = 'traveling';
+      } else if (world.startsWith('wrld_') && instance.isNotEmpty) {
+        location = '$world:$instance';
+      } else {
+        location = world;
+      }
+
+      _setSelfLocationState(
+        location: location,
+        instance: instance,
+        worldName: null,
+      );
+      notifyListeners();
+    } catch (_) {
+      // keep previous self location state when refresh fails
+    }
+  }
+
   Future<void> startRealtimeSync(VrchatDart api) async {
-    _streamingApiRef = api;
-    _stopRequested = false;
-    if (_wsRunning || _wsConnecting) return;
-    _updateWsStatus(notify: true);
-    await _connectStreaming();
+    try {
+      _streamingApiRef = api;
+      _stopRequested = false;
+      if (_wsRunning || _wsConnecting) return;
+      final ready = await AuthManager.instance.ensureAuthenticatedSession(
+        api,
+        allowForcedLogin: true,
+        emitRotationNotice: false,
+        navigateOnFailure: true,
+      );
+      if (!ready) return;
+      _updateWsStatus(notify: true);
+      await _connectStreaming();
+    } catch (e) {
+      _setWsFailureMessage('WS连接失败，服务严重降级: $e');
+      _wsRunning = false;
+      _wsConnecting = false;
+      _updateWsStatus(notify: true);
+    }
   }
 
   Future<void> ensureRealtimeSync(VrchatDart api) async {
     _streamingApiRef = api;
     if (_wsRunning || _wsConnecting) return;
-    await startRealtimeSync(api);
+    try {
+      await startRealtimeSync(api);
+    } catch (_) {
+      // startRealtimeSync already downgrades to ws failure state
+    }
   }
 
   Future<void> stopRealtimeSync() async {
@@ -229,40 +300,66 @@ class UserStore extends ChangeNotifier {
     }
     _wsRunning = false;
     _wsConnecting = false;
+    _wsFailureMessage = null;
+    _clearSelfLocationState();
     _updateWsStatus(notify: true);
   }
 
   Future<void> _connectStreaming() async {
     final api = _streamingApiRef;
-    if (api == null || _stopRequested || _wsConnecting || _wsSubscription != null) {
+    if (api == null ||
+        _stopRequested ||
+        _wsConnecting ||
+        _wsSubscription != null) {
       return;
     }
 
     _wsConnecting = true;
     _updateWsStatus(notify: true);
     try {
+      final ready = await AuthManager.instance.ensureAuthenticatedSession(
+        api,
+        allowForcedLogin: true,
+        emitRotationNotice: true,
+        navigateOnFailure: true,
+      );
+      if (!ready) {
+        _wsConnecting = false;
+        _updateWsStatus(notify: true);
+        return;
+      }
       debugPrint('[WS] Connecting to VRChat WebSocket...');
       _wsSubscription = api.streaming.vrcEventStream.listen(
         (event) {
           _reconnectAttempt = 0;
+          if (_wsFailureMessage != null) {
+            _wsFailureMessage = null;
+            notifyListeners();
+          }
           handleWebSocketEvent(event);
         },
         onError: (Object error) {
           debugPrint('[WS] Stream error: $error');
+          _setWsFailureMessage('WS连接失败，服务严重降级');
           _handleStreamingDisconnected();
         },
         onDone: () {
           debugPrint('[WS] Connection closed');
+          if (!_stopRequested) {
+            _setWsFailureMessage('WS连接失败，服务严重降级');
+          }
           _handleStreamingDisconnected();
         },
       );
 
       api.streaming.start();
       _wsRunning = true;
+      _wsFailureMessage = null;
       _updateWsStatus(notify: true);
       debugPrint('[WS] Connection started');
     } catch (e) {
       debugPrint('[WS] Connection start failed: $e');
+      _setWsFailureMessage('WS连接失败，服务严重降级');
       _wsRunning = false;
       final sub = _wsSubscription;
       _wsSubscription = null;
@@ -305,6 +402,13 @@ class UserStore extends ChangeNotifier {
   }
 
   WsConnectionStatus get wsConnectionStatus => _wsStatus;
+  String? get wsFailureMessage => _wsFailureMessage;
+
+  void _setWsFailureMessage(String message) {
+    if (_wsFailureMessage == message) return;
+    _wsFailureMessage = message;
+    notifyListeners();
+  }
 
   void _updateWsStatus({required bool notify}) {
     final next = _wsRunning
@@ -604,6 +708,15 @@ class UserStore extends ChangeNotifier {
           _onlineFriendIds.remove(e.user.id);
         }
         break;
+      case VrcStreamingEventType.userLocation:
+        final e = event as UserLocationEvent;
+        _setSelfLocationState(
+          location: e.location,
+          instance: e.instance,
+          worldName: e.world?.name,
+        );
+        _cacheWorldFromEvent(world: e.world, location: e.location);
+        break;
       default:
         return;
     }
@@ -659,6 +772,14 @@ class UserStore extends ChangeNotifier {
 
   String? getEventWorldName(String userId) => _eventWorldNameByUserId[userId];
 
+  String? getSelfLocation() => _selfLocation;
+
+  String? getSelfInstance() => _selfInstance;
+
+  String? getSelfEventWorldName() => _selfEventWorldName;
+
+  String? getSelfWorldId() => _selfWorldId;
+
   Color trustColorForTags(List<String> tags) {
     final trustTags = tags.map((e) => e.toLowerCase()).toSet();
     if (trustTags.contains('system_trust_veteran')) {
@@ -692,35 +813,45 @@ class UserStore extends ChangeNotifier {
     required World? world,
     required String? location,
   }) {
-    final worldName = world?.name.trim() ?? '';
-    if (worldName.isEmpty) return;
-
-    var worldId = world?.id.trim() ?? '';
-    if (worldId.isEmpty) {
-      final parsed = cache.CacheManager.parseLocation(location);
-      if (parsed != null) {
-        worldId = parsed.worldId;
-      }
-    }
-    if (worldId.isEmpty) return;
-
-    final cachedName =
-        cache.CacheManager.instance.worldNameCache.worldName(worldId)?.trim() ??
-        '';
-    if (cachedName == worldName) return;
-
-    unawaited(
-      cache.CacheManager.instance.worldNameCache.putWorldName(
-        worldId,
-        worldName,
-      ),
-    );
+    final _ = location; // reserved for future fallback parsing
+    if (world == null) return;
+    unawaited(WorldStore.instance.putWorld(world));
   }
 
   void _setEventWorldName(String userId, String? worldName) {
     final next = worldName?.trim() ?? '';
     if (next.isEmpty) return;
     _eventWorldNameByUserId[userId] = next;
+  }
+
+  void _setSelfLocationState({
+    required String? location,
+    required String? instance,
+    required String? worldName,
+  }) {
+    final normalizedLocation = location?.trim() ?? '';
+    final normalizedInstance = instance?.trim() ?? '';
+    final normalizedWorldName = worldName?.trim() ?? '';
+    final parsed = cache.CacheManager.parseLocation(normalizedLocation);
+
+    _selfLocation = normalizedLocation.isEmpty ? null : normalizedLocation;
+    _selfInstance = normalizedInstance.isEmpty ? null : normalizedInstance;
+    _selfWorldId = parsed?.worldId;
+    _selfEventWorldName = normalizedWorldName.isEmpty
+        ? null
+        : normalizedWorldName;
+
+    final lower = normalizedLocation.toLowerCase();
+    if (lower == 'offline') {
+      _clearSelfLocationState();
+    }
+  }
+
+  void _clearSelfLocationState() {
+    _selfLocation = null;
+    _selfInstance = null;
+    _selfEventWorldName = null;
+    _selfWorldId = null;
   }
 
   static String? _extractAvatarFileId(User user) {
@@ -870,6 +1001,7 @@ class UserStore extends ChangeNotifier {
     _loadingFriendStatusById.clear();
     _favoriteGroups = const [];
     _userFavoriteGroup = {};
+    _clearSelfLocationState();
     if (notify) notifyListeners();
   }
 

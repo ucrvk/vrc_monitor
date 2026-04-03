@@ -1,11 +1,100 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
+import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/auth_manager.dart';
 import 'package:vrc_monitor/services/auth_vault.dart';
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 import 'package:vrc_monitor/widgets/login_page.dart';
 import 'package:vrc_monitor/widgets/settings_page.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
+import 'package:vrc_monitor/widgets/world_detail_page.dart';
+
+enum QuickLookupType { instance, world, user, avatar }
+
+class QuickLookupMatch {
+  const QuickLookupMatch._({
+    required this.type,
+    required this.value,
+    this.worldId,
+    this.instanceId,
+  });
+
+  const QuickLookupMatch.instance({
+    required String value,
+    required String worldId,
+    required String instanceId,
+  }) : this._(
+         type: QuickLookupType.instance,
+         value: value,
+         worldId: worldId,
+         instanceId: instanceId,
+       );
+
+  const QuickLookupMatch.world(String value)
+    : this._(type: QuickLookupType.world, value: value);
+
+  const QuickLookupMatch.user(String value)
+    : this._(type: QuickLookupType.user, value: value);
+
+  const QuickLookupMatch.avatar(String value)
+    : this._(type: QuickLookupType.avatar, value: value);
+
+  final QuickLookupType type;
+  final String value;
+  final String? worldId;
+  final String? instanceId;
+}
+
+final RegExp _quickLookupInstanceRegExp = RegExp(
+  r'''wrld_[0-9a-fA-F-]{36}:[^\s"'`，。；！？、,;!?]+''',
+);
+
+QuickLookupMatch? parseQuickLookup(String input) {
+  final text = input.trim();
+  if (text.isEmpty) return null;
+
+  final instanceMatch = _quickLookupInstanceRegExp.firstMatch(text);
+  if (instanceMatch != null) {
+    final value = instanceMatch.group(0)!;
+    final parsed = cache.CacheManager.parseLocation(value);
+    if (parsed != null) {
+      return QuickLookupMatch.instance(
+        value: parsed.rawLocation,
+        worldId: parsed.worldId,
+        instanceId: parsed.instanceId,
+      );
+    }
+    final colonIndex = value.indexOf(':');
+    return QuickLookupMatch.instance(
+      value: value,
+      worldId: value.substring(0, colonIndex),
+      instanceId: value.substring(colonIndex + 1),
+    );
+  }
+
+  final worldMatch = RegExp(
+    r'wrld_[0-9a-fA-F-]{36}',
+  ).firstMatch(text)?.group(0);
+  if (worldMatch != null) {
+    return QuickLookupMatch.world(worldMatch);
+  }
+
+  final userMatch = RegExp(r'usr_[0-9a-fA-F-]{36}').firstMatch(text)?.group(0);
+  if (userMatch != null) {
+    return QuickLookupMatch.user(userMatch);
+  }
+
+  final avatarMatch = RegExp(
+    r'avtr_[0-9a-fA-F-]{36}',
+  ).firstMatch(text)?.group(0);
+  if (avatarMatch != null) {
+    return QuickLookupMatch.avatar(avatarMatch);
+  }
+
+  return null;
+}
 
 class MePage extends StatefulWidget {
   const MePage({
@@ -28,6 +117,8 @@ class _MePageState extends State<MePage> {
   int? _onlineUsers;
   bool _loadingUser = false;
   bool _saving = false;
+  bool _lookupLoading = false;
+  bool _bioExpanded = false;
 
   @override
   void initState() {
@@ -41,7 +132,7 @@ class _MePageState extends State<MePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("我"),
+        title: const Text('我'),
         actions: [
           AnimatedBuilder(
             animation: UserStore.instance,
@@ -52,10 +143,14 @@ class _MePageState extends State<MePage> {
                 child: IconButton(
                   tooltip: '服务器连接状态',
                   onPressed: () {
+                    final failure = UserStore.instance.wsFailureMessage;
                     final text = switch (status) {
                       WsConnectionStatus.connected => '服务器连接状态：连接',
                       WsConnectionStatus.connecting => '服务器连接状态：正在连接',
-                      WsConnectionStatus.disconnected => '服务器连接状态：断开连接',
+                      WsConnectionStatus.disconnected =>
+                        failure == null
+                            ? '服务器连接状态：断开连接'
+                            : '服务器连接状态：断开连接\n$failure',
                     };
                     ScaffoldMessenger.of(
                       context,
@@ -134,21 +229,39 @@ class _MePageState extends State<MePage> {
             child: Column(
               children: [
                 ListTile(
+                  leading: const Icon(Icons.record_voice_over_outlined),
+                  title: const Text('称谓'),
+                  subtitle: Text(
+                    _safeText(_currentUser.pronouns, fallback: '未设定'),
+                  ),
+                  trailing: IconButton(
+                    tooltip: '编辑称谓',
+                    onPressed: _saving ? null : _editPronouns,
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
                   leading: const Icon(Icons.badge_outlined),
                   title: const Text('个人简介'),
-                  subtitle: Text(
-                    _safeText(_currentUser.bio, fallback: '暂无个人简介'),
+                  subtitle: _buildBioSubtitle(),
+                  isThreeLine: _bioExpanded,
+                  trailing: IconButton(
+                    tooltip: '编辑个人简介',
+                    onPressed: _saving ? null : _editBio,
+                    icon: const Icon(Icons.edit_outlined),
                   ),
-                  trailing: const Icon(Icons.edit_outlined),
-                  onTap: _saving ? null : _editBio,
                 ),
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.circle_notifications_outlined),
                   title: const Text('状态'),
                   subtitle: Text(_statusSummary(_currentUser)),
-                  trailing: const Icon(Icons.edit_outlined),
-                  onTap: _saving ? null : _editStatus,
+                  trailing: IconButton(
+                    tooltip: '编辑状态',
+                    onPressed: _saving ? null : _editStatus,
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
                 ),
               ],
             ),
@@ -166,6 +279,22 @@ class _MePageState extends State<MePage> {
           const SizedBox(height: 8),
           Card(
             child: ListTile(
+              leading: const Icon(Icons.search),
+              title: const Text('快速查询'),
+              subtitle: const Text('支持 instance / world / user / avatar'),
+              trailing: _lookupLoading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: _lookupLoading ? null : _openQuickLookup,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: ListTile(
               leading: const Icon(Icons.settings),
               title: const Text('设置'),
               onTap: _openSettingsPage,
@@ -173,6 +302,43 @@ class _MePageState extends State<MePage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildBioSubtitle() {
+    final bio = _currentUser.bio.trim();
+    if (bio.isEmpty) {
+      return const Text('暂无个人简介');
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          bio,
+          maxLines: _bioExpanded ? null : 4,
+          overflow: _bioExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+        ),
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            setState(() {
+              _bioExpanded = !_bioExpanded;
+            });
+          },
+          child: SizedBox(
+            width: double.infinity,
+            height: 28,
+            child: Center(
+              child: Icon(
+                _bioExpanded
+                    ? Icons.keyboard_arrow_up
+                    : Icons.keyboard_arrow_down,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -241,6 +407,37 @@ class _MePageState extends State<MePage> {
     );
     if (confirmed != true) return;
     await _updateUser(UpdateUserRequest(bio: controller.text.trim()));
+  }
+
+  Future<void> _editPronouns() async {
+    final controller = TextEditingController(text: _currentUser.pronouns);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('修改称谓'),
+        content: TextField(
+          controller: controller,
+          maxLength: 32,
+          decoration: const InputDecoration(
+            hintText: '例如 he/him、she/her、they/them',
+            helperText: '留空表示未设定',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _updateUser(UpdateUserRequest(pronouns: controller.text.trim()));
   }
 
   Future<void> _editStatus() async {
@@ -390,9 +587,179 @@ class _MePageState extends State<MePage> {
   }
 
   Future<void> _openSettingsPage() async {
-    await Navigator.of(
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SettingsPage(api: widget.api.rawApi),
+      ),
+    );
+  }
+
+  Future<void> _openQuickLookup() async {
+    final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+    final clipboardText = clipboardData?.text?.trim() ?? '';
+    if (clipboardText.isNotEmpty && parseQuickLookup(clipboardText) != null) {
+      await _runQuickLookupInput(clipboardText);
+      return;
+    }
+
+    final query = await _showQuickLookupDialog();
+    if (!mounted || query == null) return;
+    await _runQuickLookupInput(query);
+  }
+
+  Future<void> _runQuickLookupInput(String rawInput) async {
+    final input = rawInput.trim();
+    if (input.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请输入要查询的内容')));
+      return;
+    }
+
+    setState(() {
+      _lookupLoading = true;
+    });
+    try {
+      final match = parseQuickLookup(input);
+      if (match == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未识别到 instance、world、user 或 avatar ID')),
+        );
+        return;
+      }
+
+      switch (match.type) {
+        case QuickLookupType.instance:
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => WorldDetailPage(
+                api: widget.api.rawApi,
+                worldId: match.worldId!,
+                instanceId: match.instanceId!,
+              ),
+            ),
+          );
+          break;
+        case QuickLookupType.world:
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('暂不支持仅 world ID 查询')));
+          break;
+        case QuickLookupType.user:
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  FriendDetailPage(userId: match.value, api: widget.api.rawApi),
+            ),
+          );
+          break;
+        case QuickLookupType.avatar:
+          await _handleAvatarLookup(match.value);
+          break;
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _lookupLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<String?> _showQuickLookupDialog() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('快速查询'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 3,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: '粘贴任意文本，自动识别 instance / world / user / avatar',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('查询'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleAvatarLookup(String avatarId) async {
+    final (avatarSuccess, avatarFailure) = await widget.api.rawApi
+        .getAvatarsApi()
+        .getAvatar(avatarId: avatarId)
+        .validateVrc();
+    if (!mounted) return;
+
+    if (avatarSuccess == null) {
+      if (avatarFailure?.response?.statusCode == 404) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('未找到该 Avatar')));
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('查询 Avatar 失败: ${avatarFailure?.error ?? '未知错误'}'),
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('设为当前模型'),
+        content: Text('已识别到 Avatar：$avatarId\n是否将其设为您的模型？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('确认'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final (selectSuccess, selectFailure) = await widget.api.rawApi
+        .getAvatarsApi()
+        .selectAvatar(avatarId: avatarId)
+        .validateVrc();
+    if (!mounted) return;
+
+    if (selectSuccess == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('设置 Avatar 失败: ${selectFailure?.error ?? '未知错误'}'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _currentUser = selectSuccess.data;
+    });
+    ScaffoldMessenger.of(
       context,
-    ).push(MaterialPageRoute<void>(builder: (_) => const SettingsPage()));
+    ).showSnackBar(const SnackBar(content: Text('已将该 Avatar 设为您的模型')));
   }
 
   Future<void> _logout() async {
@@ -405,7 +772,9 @@ class _MePageState extends State<MePage> {
     }
     if (!mounted) return;
     await Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      MaterialPageRoute<void>(
+        builder: (_) => const LoginPage(skipTokenAutoLogin: true),
+      ),
       (route) => false,
     );
   }

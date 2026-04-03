@@ -12,8 +12,10 @@ import 'package:vrc_monitor/network/vrc_network_image.dart';
 import 'package:vrc_monitor/network/web_client.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
 import 'package:vrc_monitor/services/user_store.dart';
+import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/utils/location_utils.dart';
 import 'package:vrc_monitor/widgets/vrc_avatar.dart';
+import 'package:vrc_monitor/widgets/world_detail_page.dart';
 
 class FriendDetailPage extends StatefulWidget {
   const FriendDetailPage({super.key, required this.userId, this.api});
@@ -66,11 +68,16 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       final isFriend = friendStatus?.isFriend ?? false;
 
       final eventLocation = userStore.getEventLocation(widget.userId);
+      final resolvedEventLocation = eventLocation ?? user?.location;
       final locationText = await _resolveLocationText(
         status: user?.status ?? UserStatus.offline,
-        eventLocation: eventLocation ?? user?.location,
+        eventLocation: resolvedEventLocation,
         travelingToLocation: user?.travelingToLocation,
         api: api,
+      );
+      final locationRef = _resolveLocationRef(
+        status: user?.status ?? UserStatus.offline,
+        eventLocation: resolvedEventLocation,
       );
 
       final favoriteGroups = userStore.getFavoriteGroups();
@@ -124,6 +131,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       return _DetailEnrichment(
         user: user,
         locationText: locationText,
+        locationRef: locationRef,
         isFriend: isFriend,
         favoriteGroups: favoriteGroups
             .map(
@@ -156,11 +164,12 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     if (lower.contains('private')) return '在私人房间';
 
     final eventWorldName = (() {
-      final parsedTravelingTo = _parseLocation(travelingToLocation?.trim() ?? '');
+      final parsedTravelingTo = _parseLocation(
+        travelingToLocation?.trim() ?? '',
+      );
       final worldId = parsedTravelingTo?.worldId;
       if (worldId == null) return null;
-      final worldName =
-          cache.CacheManager.instance.worldNameCache.worldName(worldId);
+      final worldName = WorldStore.instance.getWorldName(worldId);
       if (worldName == null || worldName.trim().isEmpty) return null;
       return worldName.trim();
     })();
@@ -173,26 +182,18 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     }
 
     final parsed = _parseLocation(location);
-    if (parsed == null || api == null) return location;
+    if (parsed == null) return location;
 
-    String base = location;
-    final cachedWorldName = cache.CacheManager.instance.worldNameCache
-        .worldName(parsed.worldId);
+    var base = location;
+    final cachedWorldName = WorldStore.instance.getWorldName(parsed.worldId);
     if (cachedWorldName != null && cachedWorldName.trim().isNotEmpty) {
       base = cachedWorldName.trim();
-    } else {
+    } else if (api != null) {
       try {
-        final (worldSuccess, _) = await api
-            .getWorldsApi()
-            .getWorld(worldId: parsed.worldId)
-            .validateVrc();
-        final worldName = worldSuccess?.data.name.trim() ?? '';
+        final world = await WorldStore.instance.getOrFetch(parsed.worldId, api);
+        final worldName = world?.name.trim() ?? '';
         if (worldName.isNotEmpty) {
           base = worldName;
-          await cache.CacheManager.instance.worldNameCache.putWorldName(
-            parsed.worldId,
-            worldName,
-          );
         }
       } catch (e) {
         debugPrint('Failed to resolve world name: $e');
@@ -211,7 +212,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         : base;
 
     try {
-      if (cachedType == null || cachedType.trim().isEmpty) {
+      if (api != null && (cachedType == null || cachedType.trim().isEmpty)) {
         final (instanceSuccess, _) = await api
             .getWorldsApi()
             .getWorldInstance(
@@ -244,6 +245,20 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     return regionEmoji != null
         ? '$regionEmoji $locationWithLabel'
         : locationWithLabel;
+  }
+
+  _ParsedLocation? _resolveLocationRef({
+    required UserStatus status,
+    required String? eventLocation,
+  }) {
+    if (status == UserStatus.offline) return null;
+    final location = eventLocation?.trim() ?? '';
+    if (location.isEmpty) return null;
+    final lower = location.toLowerCase();
+    if (lower == 'offline') return null;
+    if (lower.contains('private')) return null;
+    if (LocationUtils.isTraveling(location)) return null;
+    return _parseLocation(location);
   }
 
   _ParsedLocation? _parseLocation(String location) {
@@ -305,6 +320,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
     final enriched = await _enrichmentFuture;
     final targetName = enriched.user?.displayName ?? widget.userId;
 
+    if (!mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -326,7 +342,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true) return;
 
     setState(() {
       _menuActionLoading = true;
@@ -574,6 +590,7 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
               ? currentAvatarImageUrl
               : null,
           locationText: snapshot.data?.locationText,
+          locationRef: snapshot.data?.locationRef,
           bio: enrichedUser?.bio,
           nameColor: nameColor,
           status: enrichedUser?.status ?? UserStatus.offline,
@@ -615,13 +632,13 @@ class _FriendDetailPageState extends State<FriendDetailPage> {
       },
     );
   }
-
 }
 
 class _DetailEnrichment {
   const _DetailEnrichment({
     this.user,
     this.locationText,
+    this.locationRef,
     this.isFriend = false,
     this.favoriteGroups = const [],
     this.selectedGroupName,
@@ -630,6 +647,7 @@ class _DetailEnrichment {
 
   final User? user;
   final String? locationText;
+  final _ParsedLocation? locationRef;
   final bool isFriend;
   final List<_FavoriteGroupView> favoriteGroups;
   final String? selectedGroupName;
@@ -677,6 +695,7 @@ class _FriendDetailPageContent extends StatelessWidget {
     this.profilePicOverride,
     this.currentAvatarImageUrl,
     this.locationText,
+    this.locationRef,
     this.bio,
     this.nameColor,
     this.status = UserStatus.offline,
@@ -701,6 +720,7 @@ class _FriendDetailPageContent extends StatelessWidget {
   final String? profilePicOverride;
   final String? currentAvatarImageUrl;
   final String? locationText;
+  final _ParsedLocation? locationRef;
   final String? bio;
   final Color? nameColor;
   final UserStatus status;
@@ -713,6 +733,21 @@ class _FriendDetailPageContent extends StatelessWidget {
   final VrchatDartGenerated? api;
   final List<Widget> appBarActions;
 
+  Future<void> _openWorldDetail(BuildContext context) async {
+    final parsed = locationRef;
+    final rawApi = api;
+    if (parsed == null || rawApi == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WorldDetailPage(
+          api: rawApi,
+          worldId: parsed.worldId,
+          instanceId: parsed.instanceId,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     const expandedHeaderHeight = 260.0;
@@ -722,6 +757,7 @@ class _FriendDetailPageContent extends StatelessWidget {
     final normalizedLocationText = locationText?.trim() ?? '';
     final showLocation =
         status != UserStatus.offline && normalizedLocationText.isNotEmpty;
+    final canOpenWorld = api != null && locationRef != null;
     final visibleLinks = _sanitizeBioLinks(bioLinks).take(3).toList();
     final filteredMutualFriends = _visibleMutualFriends;
     final hiddenMutualCount = _hiddenMutualCount;
@@ -764,11 +800,24 @@ class _FriendDetailPageContent extends StatelessWidget {
                   if (showLocation)
                     Card(
                       margin: const EdgeInsets.only(bottom: 12),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text('当前位置：$normalizedLocationText'),
+                      child: InkWell(
+                        onTap: canOpenWorld
+                            ? () => _openWorldDetail(context)
+                            : null,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text('当前位置：$normalizedLocationText'),
+                                ),
+                              ),
+                              if (canOpenWorld)
+                                const Icon(Icons.chevron_right),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1018,7 +1067,10 @@ class _FriendDetailPageContent extends StatelessWidget {
 
     final avatarThumb = friend.currentAvatarThumbnailImageUrl?.trim() ?? '';
     if (avatarThumb.isNotEmpty) {
-      final imageUrl = cache.ImageCache.toSmallUrl(avatarThumb, isCustom: false);
+      final imageUrl = cache.ImageCache.toSmallUrl(
+        avatarThumb,
+        isCustom: false,
+      );
       return (
         imageUrl: imageUrl,
         fileId: cache.ImageCache.extractFileIdFromUrl(imageUrl),
