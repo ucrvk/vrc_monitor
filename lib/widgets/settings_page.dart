@@ -10,6 +10,7 @@ import 'package:vrc_monitor/services/cache_manager.dart';
 import 'package:vrc_monitor/services/update_installer.dart';
 import 'package:vrc_monitor/services/world_store.dart';
 import 'package:vrc_monitor/update_checker.dart';
+import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -19,6 +20,7 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  static const String _shortcutUserId = '';
   final AppUpdateChecker _updateChecker = AppUpdateChecker();
   final UpdateInstaller _updateInstaller = UpdateInstaller();
   String _branch = AppConfig.fallback.branch;
@@ -400,6 +402,17 @@ class _SettingsPageState extends State<SettingsPage> {
     return '${gb.toStringAsFixed(1)} GB';
   }
 
+  Future<void> _openShortcutFriendDetail() async {
+    final userId = _shortcutUserId.trim();
+    if (userId.isEmpty) {
+      _showLaunchFailedMessage('请先在 settings_page.dart 里设置 _shortcutUserId');
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => FriendDetailPage(userId: userId)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -559,6 +572,15 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
             ),
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _openShortcutFriendDetail,
+            child: const SizedBox(height: 10),
+          ),
+          const Text(
+            '如果你有任何建议或者想要参与开发，欢迎访问项目的 GitHub 页面！',
+            textAlign: TextAlign.center,
           ),
         ],
       ),
