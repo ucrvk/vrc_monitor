@@ -1,4 +1,5 @@
 {
-    "version": "1.1.0-beta.6",
-    "force": false
+    "version": "1.1.0-beta.7",
+    "force": false,
+    "msg":"1.1.0-beta.6版本号有问题，本版本仅修改版本号"
 }
