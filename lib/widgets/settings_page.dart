@@ -35,6 +35,8 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _updatingForceAutoLogin = false;
   bool _forceAutoLogin = false;
   int _storedWorldCount = 0;
+  int _eggTapCount = 0;
+  bool _eggUnlocked = false;
 
   @override
   void initState() {
@@ -415,6 +417,24 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  void _handleDevelopingCardTap() {
+    if (_eggUnlocked) return;
+    final nextCount = _eggTapCount + 1;
+    if (nextCount >= 5) {
+      setState(() {
+        _eggTapCount = 5;
+        _eggUnlocked = true;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('彩蛋居然免费抢')));
+      return;
+    }
+    setState(() {
+      _eggTapCount = nextCount;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -560,18 +580,32 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const SizedBox(height: 16),
           Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Image(image: AssetImage('assets/developing.gif'), width: 220),
-                  SizedBox(height: 12),
-                  Text(
-                    '正在努力开发中',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                ],
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: _handleDevelopingCardTap,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Image(
+                      image: AssetImage(
+                        _eggUnlocked
+                            ? 'assets/egg.jpg'
+                            : 'assets/developing.gif',
+                      ),
+                      width: 220,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      _eggUnlocked ? '彩蛋居然免费抢' : '正在努力开发中',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
