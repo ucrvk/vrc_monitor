@@ -29,7 +29,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _pageController = PageController(initialPage: _currentTabIndex);
     UserStore.instance.addListener(_handleWsFailureNotice);
-    unawaited(UserStore.instance.ensureRealtimeSync(widget.api));
+    unawaited(_bootstrapUserStore());
   }
 
   @override
@@ -54,12 +54,19 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       await UserStore.instance.refreshForForeground(widget.api);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('刷新失败: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('刷新失败: $e')));
     } finally {
       _refreshingOnResume = false;
     }
+  }
+
+  Future<void> _bootstrapUserStore() async {
+    await UserStore.instance.initializeFromLocalCache();
+    if (!mounted) return;
+    unawaited(UserStore.instance.refreshFromNetwork(widget.api));
+    unawaited(UserStore.instance.ensureRealtimeSync(widget.api));
   }
 
   void _handleLogout() {
@@ -72,9 +79,9 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (message == null || message.isEmpty) return;
     if (_lastWsFailureShown == message) return;
     _lastWsFailureShown = message;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override

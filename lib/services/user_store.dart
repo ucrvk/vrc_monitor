@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' show Color;
 
 import 'package:flutter/foundation.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/services/auth_manager.dart';
 import 'package:vrc_monitor/services/cache_manager.dart' as cache;
@@ -141,6 +143,9 @@ class UserStore extends ChangeNotifier {
   UserStore._();
 
   static final UserStore instance = UserStore._();
+  static const String _boxName = 'user_store_box';
+  static const String _snapshotKey = 'snapshot_v1';
+  static bool _hiveInitialized = false;
 
   static const int _pageSize = 100;
   static const Color _trustVeteranColor = Color(0xFFB18FFF);
@@ -184,28 +189,61 @@ class UserStore extends ChangeNotifier {
   Map<String, String> _userFavoriteGroup = {}; // userId -> groupName
 
   Future<void>? _initializingFuture;
+  Future<void>? _localInitializingFuture;
+  Box<String>? _box;
+  Timer? _persistDebounceTimer;
 
-  Future<void> initialize(VrchatDart api) {
+  Future<void> initializeFromLocalCache() {
+    final running = _localInitializingFuture;
+    if (running != null) return running;
+
+    final future = _doInitializeFromLocalCache();
+    _localInitializingFuture = future.whenComplete(() {
+      _localInitializingFuture = null;
+    });
+    return _localInitializingFuture!;
+  }
+
+  Future<void> _doInitializeFromLocalCache() async {
+    await _ensureStorageReady();
+    _loadFromBox();
+    notifyListeners();
+  }
+
+  Future<void> refreshFromNetwork(VrchatDart api) {
     final running = _initializingFuture;
     if (running != null) return running;
 
-    final future = _doInitialize(api);
+    final future = _doRefreshFromNetwork(api);
     _initializingFuture = future.whenComplete(() {
       _initializingFuture = null;
     });
     return _initializingFuture!;
   }
 
-  Future<void> _doInitialize(VrchatDart api) async {
+  Future<void> initialize(VrchatDart api) async {
+    await initializeFromLocalCache();
+    await refreshFromNetwork(api);
+  }
+
+  Future<void> _doRefreshFromNetwork(VrchatDart api) async {
+    await initializeFromLocalCache();
+    final memoryBackup = _captureMemorySnapshot();
     clearAll(notify: false);
-    await loadOnlineFriends(api);
-    await loadOfflineFriendIds(api);
-    await loadFavoriteData(api);
-    notifyListeners();
+    try {
+      await loadOnlineFriends(api);
+      await loadOfflineFriendIds(api);
+      await loadFavoriteData(api);
+      notifyListeners();
+      await persistSnapshot();
+    } catch (_) {
+      _restoreMemorySnapshot(memoryBackup);
+      notifyListeners();
+    }
   }
 
   Future<void> refreshForForeground(VrchatDart api) async {
-    await initialize(api);
+    await refreshFromNetwork(api);
     await _refreshSelfLocationFromCurrentUser(api.rawApi);
     await ensureRealtimeSync(api);
   }
@@ -303,6 +341,12 @@ class UserStore extends ChangeNotifier {
     _wsFailureMessage = null;
     _clearSelfLocationState();
     _updateWsStatus(notify: true);
+  }
+
+  Future<void> clearPersistentCache() async {
+    await _ensureStorageReady();
+    await _box?.clear();
+    clearAll(notify: true);
   }
 
   Future<void> _connectStreaming() async {
@@ -474,6 +518,7 @@ class UserStore extends ChangeNotifier {
       }
 
       _userFavoriteGroup = userFavoriteGroup;
+      _schedulePersist();
     } catch (_) {
       // ignore
     }
@@ -491,6 +536,7 @@ class UserStore extends ChangeNotifier {
     await Future.wait(
       online.map((f) => loadUser(f.id, api.rawApi, notify: false)),
     );
+    _schedulePersist();
   }
 
   Future<void> loadOfflineFriendIds(VrchatDart api) async {
@@ -508,6 +554,7 @@ class UserStore extends ChangeNotifier {
         _headerFileIdByUserId[friend.id] = headerFileId;
       }
     }
+    _schedulePersist();
   }
 
   Future<User?> loadUser(
@@ -722,6 +769,7 @@ class UserStore extends ChangeNotifier {
     }
 
     notifyListeners();
+    _schedulePersist();
   }
 
   List<User> getAllFriends() {
@@ -807,6 +855,7 @@ class UserStore extends ChangeNotifier {
     if (headerFileId != null) {
       _headerFileIdByUserId[user.id] = headerFileId;
     }
+    _schedulePersist();
   }
 
   void _cacheWorldFromEvent({
@@ -984,6 +1033,7 @@ class UserStore extends ChangeNotifier {
     }
     _userFavoriteGroup = newMap;
     notifyListeners();
+    _schedulePersist();
   }
 
   void clearAll({bool notify = true}) {
@@ -994,6 +1044,7 @@ class UserStore extends ChangeNotifier {
     _headerFileIdByUserId.clear();
     _limitedUsers.clear();
     _eventWorldNameByUserId.clear();
+    _locationByUserId.clear();
     _mutualFriends.clear();
     _friendStatuses.clear();
     _loadingUserById.clear();
@@ -1025,4 +1076,206 @@ class UserStore extends ChangeNotifier {
 
     return result;
   }
+
+  Future<void> _ensureStorageReady() async {
+    if (!_hiveInitialized) {
+      await Hive.initFlutter();
+      _hiveInitialized = true;
+    }
+    _box ??= await Hive.openBox<String>(_boxName);
+  }
+
+  void _loadFromBox() {
+    final raw = _box?.get(_snapshotKey);
+    if (raw == null || raw.trim().isEmpty) return;
+
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final map = decoded.cast<String, dynamic>();
+
+      final nextUsers = <String, User>{};
+      final usersRaw = map['users'];
+      if (usersRaw is List) {
+        for (final item in usersRaw) {
+          if (item is! Map) continue;
+          final user = User.fromJson(item.cast<String, dynamic>());
+          final id = user.id.trim();
+          if (id.isEmpty) continue;
+          nextUsers[id] = user;
+        }
+      }
+
+      final nextLimited = <String, LimitedUserFriend>{};
+      final limitedRaw = map['limitedUsers'];
+      if (limitedRaw is List) {
+        for (final item in limitedRaw) {
+          if (item is! Map) continue;
+          final user = LimitedUserFriend.fromJson(item.cast<String, dynamic>());
+          final id = user.id.trim();
+          if (id.isEmpty) continue;
+          nextLimited[id] = user;
+        }
+      }
+
+      final allFriendIds = <String>{};
+      final allIdsRaw = map['allFriendIds'];
+      if (allIdsRaw is List) {
+        for (final item in allIdsRaw) {
+          final id = item.toString().trim();
+          if (id.isNotEmpty) allFriendIds.add(id);
+        }
+      }
+
+      final onlineFriendIds = <String>{};
+      final onlineIdsRaw = map['onlineFriendIds'];
+      if (onlineIdsRaw is List) {
+        for (final item in onlineIdsRaw) {
+          final id = item.toString().trim();
+          if (id.isNotEmpty) onlineFriendIds.add(id);
+        }
+      }
+
+      final favoriteGroups = <FavoriteGroupData>[];
+      final groupsRaw = map['favoriteGroups'];
+      if (groupsRaw is List) {
+        for (final item in groupsRaw) {
+          if (item is! Map) continue;
+          final name = item['name']?.toString().trim() ?? '';
+          final displayName = item['displayName']?.toString().trim() ?? '';
+          if (name.isEmpty || displayName.isEmpty) continue;
+          favoriteGroups.add(
+            FavoriteGroupData(name: name, displayName: displayName),
+          );
+        }
+      }
+
+      final userFavoriteGroup = <String, String>{};
+      final favoriteMapRaw = map['userFavoriteGroup'];
+      if (favoriteMapRaw is Map) {
+        for (final entry in favoriteMapRaw.entries) {
+          final userId = entry.key.toString().trim();
+          final groupName = entry.value?.toString().trim() ?? '';
+          if (userId.isEmpty || groupName.isEmpty) continue;
+          userFavoriteGroup[userId] = groupName;
+        }
+      }
+
+      _users
+        ..clear()
+        ..addAll(nextUsers);
+      _limitedUsers
+        ..clear()
+        ..addAll(nextLimited);
+      _allFriendIds
+        ..clear()
+        ..addAll(allFriendIds);
+      _onlineFriendIds
+        ..clear()
+        ..addAll(onlineFriendIds);
+      _favoriteGroups = List.unmodifiable(favoriteGroups);
+      _userFavoriteGroup = userFavoriteGroup;
+      _rebuildImageFileIdIndexes();
+    } catch (_) {
+      // ignore broken local cache records
+    }
+  }
+
+  Future<void> persistSnapshot() async {
+    await _ensureStorageReady();
+    final box = _box;
+    if (box == null) return;
+
+    final snapshot = <String, dynamic>{
+      'users': _users.values.map((u) => u.toJson()).toList(),
+      'limitedUsers': _limitedUsers.values.map((u) => u.toJson()).toList(),
+      'allFriendIds': _allFriendIds.toList()..sort(),
+      'onlineFriendIds': _onlineFriendIds.toList()..sort(),
+      'favoriteGroups': _favoriteGroups
+          .map((g) => {'name': g.name, 'displayName': g.displayName})
+          .toList(),
+      'userFavoriteGroup': _userFavoriteGroup,
+    };
+
+    await box.put(_snapshotKey, jsonEncode(snapshot));
+  }
+
+  void _schedulePersist() {
+    _persistDebounceTimer?.cancel();
+    _persistDebounceTimer = Timer(const Duration(milliseconds: 800), () {
+      unawaited(persistSnapshot());
+    });
+  }
+
+  void _rebuildImageFileIdIndexes() {
+    _avatarFileIdByUserId.clear();
+    _headerFileIdByUserId.clear();
+    for (final user in _users.values) {
+      final avatar = _extractAvatarFileId(user);
+      if (avatar != null) {
+        _avatarFileIdByUserId[user.id] = avatar;
+      }
+      final header = _extractHeaderFileId(user);
+      if (header != null) {
+        _headerFileIdByUserId[user.id] = header;
+      }
+    }
+    for (final user in _limitedUsers.values) {
+      final avatar = _extractAvatarFileIdFromLimitedUser(user);
+      if (avatar != null) {
+        _avatarFileIdByUserId.putIfAbsent(user.id, () => avatar);
+      }
+      final header = _extractHeaderFileIdFromLimitedUser(user);
+      if (header != null) {
+        _headerFileIdByUserId.putIfAbsent(user.id, () => header);
+      }
+    }
+  }
+
+  _UserStoreMemorySnapshot _captureMemorySnapshot() {
+    return _UserStoreMemorySnapshot(
+      allFriendIds: _allFriendIds.toSet(),
+      onlineFriendIds: _onlineFriendIds.toSet(),
+      users: Map<String, User>.from(_users),
+      limitedUsers: Map<String, LimitedUserFriend>.from(_limitedUsers),
+      favoriteGroups: List<FavoriteGroupData>.from(_favoriteGroups),
+      userFavoriteGroup: Map<String, String>.from(_userFavoriteGroup),
+    );
+  }
+
+  void _restoreMemorySnapshot(_UserStoreMemorySnapshot snapshot) {
+    _allFriendIds
+      ..clear()
+      ..addAll(snapshot.allFriendIds);
+    _onlineFriendIds
+      ..clear()
+      ..addAll(snapshot.onlineFriendIds);
+    _users
+      ..clear()
+      ..addAll(snapshot.users);
+    _limitedUsers
+      ..clear()
+      ..addAll(snapshot.limitedUsers);
+    _favoriteGroups = List.unmodifiable(snapshot.favoriteGroups);
+    _userFavoriteGroup = Map<String, String>.from(snapshot.userFavoriteGroup);
+    _rebuildImageFileIdIndexes();
+  }
+}
+
+class _UserStoreMemorySnapshot {
+  const _UserStoreMemorySnapshot({
+    required this.allFriendIds,
+    required this.onlineFriendIds,
+    required this.users,
+    required this.limitedUsers,
+    required this.favoriteGroups,
+    required this.userFavoriteGroup,
+  });
+
+  final Set<String> allFriendIds;
+  final Set<String> onlineFriendIds;
+  final Map<String, User> users;
+  final Map<String, LimitedUserFriend> limitedUsers;
+  final List<FavoriteGroupData> favoriteGroups;
+  final Map<String, String> userFavoriteGroup;
 }
