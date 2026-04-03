@@ -76,10 +76,13 @@ class _VrcMonitorAppState extends State<VrcMonitorApp> {
           ),
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
+              onPressed: () async {
+                await _updateChecker.ignoreVersion(info.latestVersion);
+                if (context.mounted) {
+                  Navigator.of(context).pop();
+                }
               },
-              child: const Text('取消'),
+              child: const Text('取消（不再提示）'),
             ),
             FilledButton(
               onPressed: () async {
