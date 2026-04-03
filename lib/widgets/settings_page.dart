@@ -20,7 +20,8 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  static const String _shortcutUserId = '';
+  static const String _fixedFriendUserId =
+      'usr_de21ec4a-523b-4b6d-a453-b5514bef20e1';
   final AppUpdateChecker _updateChecker = AppUpdateChecker();
   final UpdateInstaller _updateInstaller = UpdateInstaller();
   String _branch = AppConfig.fallback.branch;
@@ -402,14 +403,11 @@ class _SettingsPageState extends State<SettingsPage> {
     return '${gb.toStringAsFixed(1)} GB';
   }
 
-  Future<void> _openShortcutFriendDetail() async {
-    final userId = _shortcutUserId.trim();
-    if (userId.isEmpty) {
-      _showLaunchFailedMessage('请先在 settings_page.dart 里设置 _shortcutUserId');
-      return;
-    }
+  Future<void> _openFixedFriendDetail() async {
     await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => FriendDetailPage(userId: userId)),
+      MaterialPageRoute<void>(
+        builder: (_) => const FriendDetailPage(userId: _fixedFriendUserId),
+      ),
     );
   }
 
@@ -575,13 +573,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: _openShortcutFriendDetail,
+            onTap: _openFixedFriendDetail,
             child: const SizedBox(height: 10),
           ),
-          const Text(
-            '如果你有任何建议或者想要参与开发，欢迎访问项目的 GitHub 页面！',
-            textAlign: TextAlign.center,
-          ),
+          const Text('最后希望有人能够添加我的好友', textAlign: TextAlign.center),
         ],
       ),
     );
