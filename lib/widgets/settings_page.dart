@@ -418,7 +418,12 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _handleDevelopingCardTap() {
-    if (_eggUnlocked) return;
+    if (_eggUnlocked) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('你已经抢到免费鸡蛋了，不要继续抢了')));
+      return;
+    }
     final nextCount = _eggTapCount + 1;
     if (nextCount >= 5) {
       setState(() {
