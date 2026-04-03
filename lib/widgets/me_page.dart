@@ -587,9 +587,11 @@ class _MePageState extends State<MePage> {
   }
 
   Future<void> _openSettingsPage() async {
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => const SettingsPage()));
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SettingsPage(api: widget.api.rawApi),
+      ),
+    );
   }
 
   Future<void> _openQuickLookup() async {

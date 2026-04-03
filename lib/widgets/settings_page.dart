@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:vrchat_dart/vrchat_dart.dart';
 import 'package:vrc_monitor/app_config.dart';
 import 'package:vrc_monitor/app_settings.dart';
 import 'package:vrc_monitor/services/auth_vault.dart';
@@ -13,7 +14,9 @@ import 'package:vrc_monitor/update_checker.dart';
 import 'package:vrc_monitor/widgets/friend_detail_page.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, this.api});
+
+  final VrchatDartGenerated? api;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -406,7 +409,8 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _openFixedFriendDetail() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => const FriendDetailPage(userId: _fixedFriendUserId),
+        builder: (_) =>
+            FriendDetailPage(userId: _fixedFriendUserId, api: widget.api),
       ),
     );
   }
