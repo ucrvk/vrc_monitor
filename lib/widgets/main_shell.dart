@@ -63,7 +63,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   }
 
   Future<void> _bootstrapUserStore() async {
-    await UserStore.instance.initializeFromLocalCache();
+    try {
+      await UserStore.instance.initializeFromLocalCache();
+    } catch (_) {
+      // Local cache failure should not block network refresh.
+    }
     if (!mounted) return;
     unawaited(UserStore.instance.refreshFromNetwork(widget.api));
     unawaited(UserStore.instance.ensureRealtimeSync(widget.api));

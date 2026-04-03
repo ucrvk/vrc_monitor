@@ -205,8 +205,12 @@ class UserStore extends ChangeNotifier {
   }
 
   Future<void> _doInitializeFromLocalCache() async {
-    await _ensureStorageReady();
-    _loadFromBox();
+    try {
+      await _ensureStorageReady();
+      _loadFromBox();
+    } catch (_) {
+      // Local cache read failure should not block app startup.
+    }
     notifyListeners();
   }
 
@@ -229,10 +233,13 @@ class UserStore extends ChangeNotifier {
   Future<void> _doRefreshFromNetwork(VrchatDart api) async {
     await initializeFromLocalCache();
     final memoryBackup = _captureMemorySnapshot();
-    clearAll(notify: false);
     try {
-      await loadOnlineFriends(api);
-      await loadOfflineFriendIds(api);
+      final onlineIds = await loadOnlineFriends(api);
+      final offlineIds = await loadOfflineFriendIds(api);
+      _pruneStaleFriendState(
+        allIds: <String>{...onlineIds, ...offlineIds},
+        onlineIds: onlineIds,
+      );
       await loadFavoriteData(api);
       notifyListeners();
       await persistSnapshot();
@@ -524,10 +531,12 @@ class UserStore extends ChangeNotifier {
     }
   }
 
-  Future<void> loadOnlineFriends(VrchatDart api) async {
+  Future<Set<String>> loadOnlineFriends(VrchatDart api) async {
     final online = await _fetchAllFriends(api: api, offline: false);
+    final ids = <String>{};
 
     for (final friend in online) {
+      ids.add(friend.id);
       _allFriendIds.add(friend.id);
       _onlineFriendIds.add(friend.id);
       _limitedUsers[friend.id] = friend;
@@ -537,12 +546,15 @@ class UserStore extends ChangeNotifier {
       online.map((f) => loadUser(f.id, api.rawApi, notify: false)),
     );
     _schedulePersist();
+    return ids;
   }
 
-  Future<void> loadOfflineFriendIds(VrchatDart api) async {
+  Future<Set<String>> loadOfflineFriendIds(VrchatDart api) async {
     final offline = await _fetchAllFriends(api: api, offline: true);
+    final ids = <String>{};
 
     for (final friend in offline) {
+      ids.add(friend.id);
       _allFriendIds.add(friend.id);
       _limitedUsers[friend.id] = friend;
       final avatarFileId = _extractAvatarFileIdFromLimitedUser(friend);
@@ -555,6 +567,7 @@ class UserStore extends ChangeNotifier {
       }
     }
     _schedulePersist();
+    return ids;
   }
 
   Future<User?> loadUser(
@@ -1079,7 +1092,11 @@ class UserStore extends ChangeNotifier {
 
   Future<void> _ensureStorageReady() async {
     if (!_hiveInitialized) {
-      await Hive.initFlutter();
+      try {
+        await Hive.initFlutter();
+      } catch (_) {
+        // Hive may already be initialized by other store.
+      }
       _hiveInitialized = true;
     }
     _box ??= await Hive.openBox<String>(_boxName);
@@ -1095,26 +1112,56 @@ class UserStore extends ChangeNotifier {
       final map = decoded.cast<String, dynamic>();
 
       final nextUsers = <String, User>{};
-      final usersRaw = map['users'];
-      if (usersRaw is List) {
-        for (final item in usersRaw) {
-          if (item is! Map) continue;
-          final user = User.fromJson(item.cast<String, dynamic>());
+      final usersByIdRaw = map['usersById'];
+      if (usersByIdRaw is Map) {
+        for (final entry in usersByIdRaw.entries) {
+          final userId = entry.key.toString().trim();
+          if (userId.isEmpty || entry.value is! Map) continue;
+          final user = User.fromJson(
+            (entry.value as Map).cast<String, dynamic>(),
+          );
           final id = user.id.trim();
           if (id.isEmpty) continue;
           nextUsers[id] = user;
         }
+      } else {
+        final usersRaw = map['users'];
+        if (usersRaw is List) {
+          for (final item in usersRaw) {
+            if (item is! Map) continue;
+            final user = User.fromJson(item.cast<String, dynamic>());
+            final id = user.id.trim();
+            if (id.isEmpty) continue;
+            nextUsers[id] = user;
+          }
+        }
       }
 
       final nextLimited = <String, LimitedUserFriend>{};
-      final limitedRaw = map['limitedUsers'];
-      if (limitedRaw is List) {
-        for (final item in limitedRaw) {
-          if (item is! Map) continue;
-          final user = LimitedUserFriend.fromJson(item.cast<String, dynamic>());
+      final limitedByIdRaw = map['limitedUsersById'];
+      if (limitedByIdRaw is Map) {
+        for (final entry in limitedByIdRaw.entries) {
+          final userId = entry.key.toString().trim();
+          if (userId.isEmpty || entry.value is! Map) continue;
+          final user = LimitedUserFriend.fromJson(
+            (entry.value as Map).cast<String, dynamic>(),
+          );
           final id = user.id.trim();
           if (id.isEmpty) continue;
           nextLimited[id] = user;
+        }
+      } else {
+        final limitedRaw = map['limitedUsers'];
+        if (limitedRaw is List) {
+          for (final item in limitedRaw) {
+            if (item is! Map) continue;
+            final user = LimitedUserFriend.fromJson(
+              item.cast<String, dynamic>(),
+            );
+            final id = user.id.trim();
+            if (id.isEmpty) continue;
+            nextLimited[id] = user;
+          }
         }
       }
 
@@ -1186,9 +1233,20 @@ class UserStore extends ChangeNotifier {
     final box = _box;
     if (box == null) return;
 
+    final limitedIds = _limitedUsers.keys.toSet();
+    final extraUsersById = <String, Map<String, dynamic>>{};
+    for (final entry in _users.entries) {
+      if (limitedIds.contains(entry.key)) continue;
+      extraUsersById[entry.key] = entry.value.toJson();
+    }
+    final limitedUsersById = <String, Map<String, dynamic>>{};
+    for (final entry in _limitedUsers.entries) {
+      limitedUsersById[entry.key] = entry.value.toJson();
+    }
+
     final snapshot = <String, dynamic>{
-      'users': _users.values.map((u) => u.toJson()).toList(),
-      'limitedUsers': _limitedUsers.values.map((u) => u.toJson()).toList(),
+      'usersById': extraUsersById,
+      'limitedUsersById': limitedUsersById,
       'allFriendIds': _allFriendIds.toList()..sort(),
       'onlineFriendIds': _onlineFriendIds.toList()..sort(),
       'favoriteGroups': _favoriteGroups
@@ -1259,6 +1317,29 @@ class UserStore extends ChangeNotifier {
     _favoriteGroups = List.unmodifiable(snapshot.favoriteGroups);
     _userFavoriteGroup = Map<String, String>.from(snapshot.userFavoriteGroup);
     _rebuildImageFileIdIndexes();
+  }
+
+  void _pruneStaleFriendState({
+    required Set<String> allIds,
+    required Set<String> onlineIds,
+  }) {
+    _allFriendIds
+      ..clear()
+      ..addAll(allIds);
+    _onlineFriendIds
+      ..clear()
+      ..addAll(onlineIds);
+
+    _limitedUsers.removeWhere((userId, _) => !allIds.contains(userId));
+    _users.removeWhere((userId, _) => !allIds.contains(userId));
+    _avatarFileIdByUserId.removeWhere((userId, _) => !allIds.contains(userId));
+    _headerFileIdByUserId.removeWhere((userId, _) => !allIds.contains(userId));
+    _locationByUserId.removeWhere((userId, _) => !onlineIds.contains(userId));
+    _eventWorldNameByUserId.removeWhere(
+      (userId, _) => !allIds.contains(userId),
+    );
+    _mutualFriends.removeWhere((userId, _) => !allIds.contains(userId));
+    _friendStatuses.removeWhere((userId, _) => !allIds.contains(userId));
   }
 }
 
