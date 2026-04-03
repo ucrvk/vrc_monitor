@@ -617,9 +617,25 @@ class _SettingsPageState extends State<SettingsPage> {
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: _openFixedFriendDetail,
-            child: const SizedBox(height: 10),
+            child: const Card(
+              child: Padding(
+                padding: EdgeInsets.all(5),
+                child: Text.rich(
+                  TextSpan(
+                    text: '最后希望有人能够添加我的好友:',
+                    style: TextStyle(color: Colors.black),
+                    children: [
+                      TextSpan(
+                        text: 'wenwen12305',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
           ),
-          const Text('最后希望有人能够添加我的好友:wenwen12305', textAlign: TextAlign.center),
         ],
       ),
     );
