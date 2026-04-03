@@ -438,6 +438,9 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {
       _eggTapCount = nextCount;
     });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('可爱的eku不会去抢免费鸡蛋的')));
   }
 
   @override
